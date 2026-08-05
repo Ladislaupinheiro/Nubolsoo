@@ -1,7 +1,7 @@
 /* =========================================================
    sw.js — Service Worker (cache-first, app shell offline)
    ========================================================= */
-const CACHE_NAME = 'nubolso-v2';
+const CACHE_NAME = 'nubolso-v3';
 const APP_SHELL = [
   './',
   './index.html',
@@ -16,11 +16,19 @@ const APP_SHELL = [
 ];
 
 self.addEventListener('install', (event) => {
+  // Não chama self.skipWaiting() aqui: o novo SW fica em estado "waiting"
+  // até a página pedir a ativação (ver listener de 'message' abaixo),
+  // dando ao utilizador a oportunidade de aceitar ou adiar a atualização.
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then((cache) => cache.addAll(APP_SHELL))
-      .then(() => self.skipWaiting())
   );
+});
+
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
 });
 
 self.addEventListener('activate', (event) => {

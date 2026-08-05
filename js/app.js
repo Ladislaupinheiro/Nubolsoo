@@ -509,7 +509,7 @@ function openBudgetEditSheet(category) {
       <button type="submit" class="btn btn-accent btn-block">Guardar limite</button>
     </form>
   `);
-  qs('#budgetForm', body).addEventListener('submit', async (e) => {
+  body.addEventListener('submit', async (e) => {
     e.preventDefault();
     const val = parseFloat(e.target.limit.value) || 0;
     await DB.put('budgets', { category, limit: val });
@@ -573,7 +573,7 @@ function openGoalSheet(existing) {
       ` : ''}
     </form>
   `);
-  qs('#goalForm', body).addEventListener('submit', async (e) => {
+  body.addEventListener('submit', async (e) => {
     e.preventDefault();
     const f = e.target;
     const record = {
@@ -670,7 +670,7 @@ function openBillSheet(existing) {
       chip.classList.add('active');
     });
   });
-  qs('#billForm', body).addEventListener('submit', async (e) => {
+  body.addEventListener('submit', async (e) => {
     e.preventDefault();
     const f = e.target;
     const activeChip = qs('#billCatChips .chip.active', body);
@@ -745,7 +745,7 @@ function openInvestmentSheet(existing) {
       ${existing ? `<button type="button" class="btn btn-danger btn-block" data-action="delete-investment" data-id="${existing.id}">Eliminar ativo</button>` : ''}
     </form>
   `);
-  qs('#invForm', body).addEventListener('submit', async (e) => {
+  body.addEventListener('submit', async (e) => {
     e.preventDefault();
     const f = e.target;
     const record = {
@@ -952,6 +952,13 @@ document.addEventListener('click', async (e) => {
     }
     return;
   }
+
+  if (action === 'update-now') {
+    if (waitingWorker) waitingWorker.postMessage({ type: 'SKIP_WAITING' });
+    hideUpdateBanner();
+    return;
+  }
+  if (action === 'update-later') { hideUpdateBanner(); return; }
 });
 
 document.addEventListener('change', (e) => {
@@ -975,12 +982,72 @@ function routeFromHash() {
 }
 window.addEventListener('hashchange', () => { routeFromHash(); render(); });
 
+/* ========================================================================
+   ATUALIZAÇÃO DO APP (service worker)
+   ======================================================================== */
+let waitingWorker = null;
+
+function showUpdateBanner(worker) {
+  waitingWorker = worker;
+  if (qs('#updateBanner')) return; // já visível
+  const banner = el(`
+    <div class="update-banner" id="updateBanner">
+      <div class="update-banner__text">
+        <strong class="display">Nova atualização disponível</strong>
+        <span>Reinicie para obter as últimas melhorias.</span>
+      </div>
+      <div class="update-banner__actions">
+        <button class="btn btn-ghost btn-sm" data-action="update-later">Depois</button>
+        <button class="btn btn-accent btn-sm" data-action="update-now">Atualizar</button>
+      </div>
+    </div>
+  `);
+  document.body.appendChild(banner);
+}
+function hideUpdateBanner() {
+  const b = qs('#updateBanner');
+  if (b) b.remove();
+}
+
 (async function init() {
   routeFromHash();
   await loadState();
   render();
 
   if ('serviceWorker' in navigator) {
-    try { await navigator.serviceWorker.register('./sw.js'); } catch (err) { console.warn('SW falhou:', err); }
+    try {
+      const reg = await navigator.serviceWorker.register('./sw.js');
+
+      // Já existe um SW novo à espera (ex: separador ficou aberto durante a atualização)
+      if (reg.waiting && navigator.serviceWorker.controller) {
+        showUpdateBanner(reg.waiting);
+      }
+
+      // Deteta quando um novo SW termina de instalar
+      reg.addEventListener('updatefound', () => {
+        const newWorker = reg.installing;
+        if (!newWorker) return;
+        newWorker.addEventListener('statechange', () => {
+          // 'controller' só existe se já havia um SW ativo antes,
+          // ou seja: isto é uma atualização, não a primeira instalação.
+          if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+            showUpdateBanner(newWorker);
+          }
+        });
+      });
+
+      // Verifica periodicamente se há uma nova versão publicada
+      setInterval(() => reg.update().catch(() => {}), 60 * 60 * 1000);
+
+      // Quando o novo SW assume o controlo, recarrega a página uma única vez
+      let refreshing = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (refreshing) return;
+        refreshing = true;
+        window.location.reload();
+      });
+    } catch (err) {
+      console.warn('SW falhou:', err);
+    }
   }
 })();
