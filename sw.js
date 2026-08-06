@@ -1,7 +1,7 @@
 /* =========================================================
    sw.js — Service Worker (cache-first, app shell offline)
    ========================================================= */
-const CACHE_NAME = 'nubolso-v3';
+const CACHE_NAME = 'nubolso-v5';
 const APP_SHELL = [
   './',
   './index.html',
@@ -12,7 +12,8 @@ const APP_SHELL = [
   './js/app.js',
   './icons/icon-192.png',
   './icons/icon-512.png',
-  './icons/icon-maskable-512.png'
+  './icons/icon-maskable-512.png',
+  'https://cdn.jsdelivr.net/npm/apexcharts@3.49.0/dist/apexcharts.min.js'
 ];
 
 self.addEventListener('install', (event) => {
@@ -46,7 +47,7 @@ self.addEventListener('fetch', (event) => {
     caches.match(event.request).then((cached) => {
       const network = fetch(event.request)
         .then((response) => {
-          if (response && response.status === 200 && response.type === 'basic') {
+          if (response && response.status === 200 && (response.type === 'basic' || response.type === 'cors')) {
             const clone = response.clone();
             caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
           }

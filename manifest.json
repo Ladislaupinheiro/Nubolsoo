@@ -14,5 +14,35 @@
     { "src": "./icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
     { "src": "./icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
     { "src": "./icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    {
+      "name": "Novo lançamento",
+      "short_name": "Lançamento",
+      "description": "Registar uma nova receita ou despesa",
+      "url": "./index.html?action=new-tx#/transacoes",
+      "icons": [{ "src": "./icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "Nova meta",
+      "short_name": "Meta",
+      "description": "Criar uma nova meta de poupança",
+      "url": "./index.html?action=new-goal#/metas",
+      "icons": [{ "src": "./icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "Contas a pagar",
+      "short_name": "Contas",
+      "description": "Ver contas pendentes e vencidas",
+      "url": "./index.html#/contas",
+      "icons": [{ "src": "./icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "Relatórios",
+      "short_name": "Relatórios",
+      "description": "Ver relatórios e gráficos do mês",
+      "url": "./index.html#/relatorios",
+      "icons": [{ "src": "./icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    }
   ]
 }

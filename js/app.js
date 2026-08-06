@@ -4,7 +4,7 @@
    ========================================================= */
 
 /* ----------------------- Constantes ----------------------- */
-const EXPENSE_CATS = [
+const DEFAULT_EXPENSE_CATS = [
   { name: 'Alimentação', color: '#c9a227' },
   { name: 'Transporte', color: '#4fa37b' },
   { name: 'Moradia', color: '#7a8fa6' },
@@ -14,17 +14,18 @@ const EXPENSE_CATS = [
   { name: 'Compras', color: '#5ea8a0' },
   { name: 'Outros', color: '#8fa396' }
 ];
-const INCOME_CATS = [
+const DEFAULT_INCOME_CATS = [
   { name: 'Salário', color: '#4fa37b' },
   { name: 'Freelance', color: '#6fb88a' },
   { name: 'Investimentos', color: '#c9a227' },
   { name: 'Outros', color: '#8fa396' }
 ];
+const CATEGORY_PALETTE = ['#c9a227', '#4fa37b', '#c0563e', '#7a8fa6', '#8b6dae', '#d4915d', '#5ea8a0', '#8fa396', '#6fb88a', '#a8763e', '#5a7fc4', '#c46f9e'];
 const INVESTMENT_TYPES = ['Poupança', 'Ações', 'Fundos', 'Imóveis', 'Criptomoeda', 'Outros'];
 const MONTH_NAMES = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
 
 /* ----------------------- Estado global ----------------------- */
-let STATE = { transactions: [], budgets: {}, goals: [], bills: [], investments: [] };
+let STATE = { transactions: [], budgets: {}, goals: [], bills: [], investments: [], categories: [], security: null };
 let UI = {
   tab: 'dashboard',
   txMonth: currentMonthKey(),
@@ -54,6 +55,16 @@ function formatKz(v) {
   return `${sign}Kz ${parts[0]},${parts[1]}`;
 }
 function todayISO() { return new Date().toISOString().slice(0, 10); }
+
+/* ----------------------- Segurança (PIN) ----------------------- */
+function randomSalt() {
+  return Array.from(crypto.getRandomValues(new Uint8Array(16))).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+async function hashPin(pin, salt) {
+  const enc = new TextEncoder().encode(`${salt}:${pin}`);
+  const buf = await crypto.subtle.digest('SHA-256', enc);
+  return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
 function currentMonthKey() { return new Date().toISOString().slice(0, 7); }
 function monthLabel(key) {
   const [y, m] = key.split('-').map(Number);
@@ -71,11 +82,10 @@ function daysInMonth(key) {
   return new Date(y, m, 0).getDate();
 }
 function catColor(name, type) {
-  const list = type === 'income' ? INCOME_CATS : EXPENSE_CATS;
-  const found = list.find((c) => c.name === name);
+  const found = STATE.categories.find((c) => c.type === type && c.name === name);
   return found ? found.color : '#8fa396';
 }
-function catList(type) { return type === 'income' ? INCOME_CATS : EXPENSE_CATS; }
+function catList(type) { return STATE.categories.filter((c) => c.type === type); }
 
 /* ----------------------- Consultas derivadas do estado ----------------------- */
 function txForMonth(key) { return STATE.transactions.filter((t) => t.date.slice(0, 7) === key); }
@@ -92,8 +102,8 @@ function balanceUpToMonthEnd(key) {
 
 /* ----------------------- Carregamento inicial ----------------------- */
 async function loadState() {
-  const [transactions, budgetsArr, goals, bills, investments] = await Promise.all([
-    DB.getAll('transactions'), DB.getAll('budgets'), DB.getAll('goals'), DB.getAll('bills'), DB.getAll('investments')
+  const [transactions, budgetsArr, goals, bills, investments, categories, security] = await Promise.all([
+    DB.getAll('transactions'), DB.getAll('budgets'), DB.getAll('goals'), DB.getAll('bills'), DB.getAll('investments'), DB.getAll('categories'), DB.get('settings', 'security')
   ]);
   STATE.transactions = transactions.sort((a, b) => (b.date + b.id).localeCompare(a.date + a.id));
   STATE.budgets = {};
@@ -101,6 +111,17 @@ async function loadState() {
   STATE.goals = goals;
   STATE.bills = bills.sort((a, b) => a.dueDay - b.dueDay);
   STATE.investments = investments;
+  STATE.categories = categories;
+  STATE.security = security || null;
+
+  if (STATE.categories.length === 0) {
+    const seeds = [
+      ...DEFAULT_EXPENSE_CATS.map((c) => ({ id: DB.uid(), name: c.name, type: 'expense', color: c.color })),
+      ...DEFAULT_INCOME_CATS.map((c) => ({ id: DB.uid(), name: c.name, type: 'income', color: c.color }))
+    ];
+    for (const s of seeds) await DB.put('categories', s);
+    STATE.categories = seeds;
+  }
 }
 
 /* ----------------------- Toast ----------------------- */
@@ -158,6 +179,8 @@ const iconUpload = icon('<path d="M12 21V9M7 14l5-5 5 5"/><path d="M5 3h14"/>');
 const iconTrash = icon('<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>');
 const iconChevronLeft = icon('<path d="M15 18l-6-6 6-6"/>');
 const iconChevronRight = icon('<path d="M9 18l6-6-6-6"/>');
+const iconTag = icon('<path d="M20.59 13.41 11 3.83A2 2 0 0 0 9.59 3.24L4 3a1 1 0 0 0-1 1l.24 5.59a2 2 0 0 0 .59 1.41l9.58 9.59a2 2 0 0 0 2.83 0l4.35-4.35a2 2 0 0 0 0-2.83z"/><circle cx="7.5" cy="7.5" r="1.2" fill="currentColor" stroke="none"/>');
+const iconLock = icon('<rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>');
 
 /* ========================================================================
    TOPBAR & NAVEGAÇÃO
@@ -208,6 +231,8 @@ function openMoreSheet() {
       <button class="btn btn-block" style="justify-content:flex-start" data-action="nav-more" data-tab="investimentos">${iconTrend} &nbsp; Investimentos</button>
       <button class="btn btn-block" style="justify-content:flex-start" data-action="nav-more" data-tab="relatorios">${iconChart} &nbsp; Relatórios</button>
       <hr class="rule">
+      <button class="btn btn-block" style="justify-content:flex-start" data-action="open-categories-sheet">${iconTag} &nbsp; Categorias</button>
+      <button class="btn btn-block" style="justify-content:flex-start" data-action="open-security-sheet">${iconLock} &nbsp; Segurança${STATE.security ? ' · PIN ativo' : ''}</button>
       <button class="btn btn-block" style="justify-content:flex-start" data-action="export-data">${iconDownload} &nbsp; Exportar dados (JSON)</button>
       <button class="btn btn-block" style="justify-content:flex-start" data-action="trigger-import">${iconUpload} &nbsp; Importar dados</button>
       <input type="file" id="importInput" accept="application/json" class="hidden">
@@ -218,6 +243,227 @@ function openMoreSheet() {
   `);
   openSheet('Mais opções', body);
   if (window.deferredInstallPrompt) qs('#installBtn', body).hidden = false;
+}
+
+/* ========================================================================
+   CATEGORIAS (personalizáveis)
+   ======================================================================== */
+function categoryRow(c) {
+  return el(`
+    <div class="list-item" data-action="open-category-sheet" data-id="${c.id}" style="cursor:pointer">
+      ${catDotHtml(c.name, c.type)}
+      <div class="list-item__body"><div class="list-item__title">${escapeHtml(c.name)}</div></div>
+    </div>
+  `);
+}
+
+function openCategoriesSheet() {
+  const body = el(`
+    <div class="stack">
+      <div class="row-between">
+        <p class="section-title" style="margin:0">Despesas</p>
+        <button type="button" class="btn btn-sm btn-ghost" data-action="open-category-sheet" data-type="expense">+ Nova</button>
+      </div>
+      <div class="stack" id="catExpenseList"></div>
+      <hr class="rule">
+      <div class="row-between">
+        <p class="section-title" style="margin:0">Receitas</p>
+        <button type="button" class="btn btn-sm btn-ghost" data-action="open-category-sheet" data-type="income">+ Nova</button>
+      </div>
+      <div class="stack" id="catIncomeList"></div>
+    </div>
+  `);
+  const expHolder = qs('#catExpenseList', body);
+  const incHolder = qs('#catIncomeList', body);
+  const expCats = catList('expense');
+  const incCats = catList('income');
+  if (expCats.length) expCats.forEach((c) => expHolder.appendChild(categoryRow(c)));
+  else expHolder.appendChild(el(`<p style="font-size:12.5px;color:var(--text-dim);margin:4px 0">Nenhuma categoria de despesa.</p>`));
+  if (incCats.length) incCats.forEach((c) => incHolder.appendChild(categoryRow(c)));
+  else incHolder.appendChild(el(`<p style="font-size:12.5px;color:var(--text-dim);margin:4px 0">Nenhuma categoria de receita.</p>`));
+  openSheet('Categorias', body);
+}
+
+function openCategorySheet(existing, forcedType) {
+  const type = forcedType || (existing ? existing.type : 'expense');
+  const body = el(`
+    <form class="stack" id="categoryForm">
+      <div class="segmented" id="catTypeSeg">
+        <button type="button" class="${type === 'expense' ? 'active expense' : ''}" data-type="expense">Despesa</button>
+        <button type="button" class="${type === 'income' ? 'active income' : ''}" data-type="income">Receita</button>
+      </div>
+      <div class="field">
+        <label>Nome da categoria</label>
+        <input type="text" name="name" placeholder="Ex: Assinaturas" value="${existing ? escapeHtml(existing.name) : ''}" maxlength="24" required autofocus>
+      </div>
+      <div class="field">
+        <label>Cor</label>
+        <div class="chip-group" id="catColorChips">
+          ${CATEGORY_PALETTE.map((c) => `<button type="button" class="color-swatch ${existing ? (existing.color === c ? 'active' : '') : (c === CATEGORY_PALETTE[0] ? 'active' : '')}" data-color="${c}" style="background:${c}" title="${c}"></button>`).join('')}
+        </div>
+      </div>
+      <button type="submit" class="btn btn-accent btn-block">${existing ? 'Guardar alterações' : 'Adicionar categoria'}</button>
+      ${existing ? `<button type="button" class="btn btn-danger btn-block" data-action="delete-category" data-id="${existing.id}">Eliminar categoria</button>` : ''}
+    </form>
+  `);
+
+  // troca de tipo re-renderiza a sheet (mesmo padrão do formulário de lançamento)
+  qsa('#catTypeSeg button', body).forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (btn.dataset.type === type) return;
+      closeSheet();
+      openCategorySheet(existing, btn.dataset.type);
+    });
+  });
+  qsa('#catColorChips .color-swatch', body).forEach((sw) => {
+    sw.addEventListener('click', () => {
+      qsa('#catColorChips .color-swatch', body).forEach((s) => s.classList.remove('active'));
+      sw.classList.add('active');
+    });
+  });
+
+  body.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const name = e.target.name.value.trim();
+    if (!name) { showToast('Informe um nome'); return; }
+    const dup = STATE.categories.find((c) => c.type === type && c.name.toLowerCase() === name.toLowerCase() && (!existing || c.id !== existing.id));
+    if (dup) { showToast('Já existe uma categoria com este nome'); return; }
+    const activeColor = qs('#catColorChips .color-swatch.active', body);
+    const record = {
+      id: existing ? existing.id : DB.uid(),
+      name,
+      type,
+      color: activeColor ? activeColor.dataset.color : CATEGORY_PALETTE[0]
+    };
+    await DB.put('categories', record);
+    await loadState();
+    closeSheet();
+    openCategoriesSheet();
+    render();
+    showToast(existing ? 'Categoria atualizada' : 'Categoria adicionada');
+  });
+
+  openSheet(existing ? 'Editar categoria' : 'Nova categoria', body);
+}
+
+/* ========================================================================
+   SEGURANÇA (bloqueio por PIN)
+   ======================================================================== */
+function openSecuritySheet() {
+  if (!STATE.security) { openPinFormSheet('create'); return; }
+  const body = el(`
+    <div class="stack">
+      <p style="font-size:12.5px;color:var(--text-dim)">O bloqueio por PIN pede um código de 4 dígitos sempre que abres o Nubolso.</p>
+      <button type="button" class="btn btn-block" data-action="open-pin-form" data-mode="change">Alterar PIN</button>
+      <button type="button" class="btn btn-block btn-danger" data-action="open-pin-form" data-mode="disable">Desativar bloqueio por PIN</button>
+    </div>
+  `);
+  openSheet('Segurança', body);
+}
+
+function openPinFormSheet(mode) {
+  const needsCurrent = mode === 'change' || mode === 'disable';
+  const needsNew = mode === 'create' || mode === 'change';
+  const body = el(`
+    <form class="stack" id="pinForm">
+      ${needsCurrent ? `<div class="field"><label>PIN atual</label><input type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" name="current" required autofocus></div>` : ''}
+      ${needsNew ? `
+        <div class="field"><label>${mode === 'change' ? 'Novo PIN' : 'PIN'} (4 dígitos)</label><input type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" name="pin1" required ${needsCurrent ? '' : 'autofocus'}></div>
+        <div class="field"><label>Confirmar PIN</label><input type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" name="pin2" required></div>
+      ` : ''}
+      <button type="submit" class="btn ${mode === 'disable' ? 'btn-danger' : 'btn-accent'} btn-block">${mode === 'disable' ? 'Desativar bloqueio' : mode === 'change' ? 'Guardar novo PIN' : 'Ativar bloqueio por PIN'}</button>
+    </form>
+  `);
+
+  body.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.target;
+
+    if (needsCurrent) {
+      const currentHash = await hashPin(f.current.value, STATE.security.pinSalt);
+      if (currentHash !== STATE.security.pinHash) { showToast('PIN atual incorreto'); return; }
+    }
+
+    if (mode === 'disable') {
+      await DB.delete('settings', 'security');
+      STATE.security = null;
+      closeSheet();
+      showToast('Bloqueio por PIN desativado');
+      return;
+    }
+
+    if (!/^\d{4}$/.test(f.pin1.value)) { showToast('O PIN deve ter 4 dígitos'); return; }
+    if (f.pin1.value !== f.pin2.value) { showToast('Os PINs não coincidem'); return; }
+
+    const salt = randomSalt();
+    const hash = await hashPin(f.pin1.value, salt);
+    const record = { key: 'security', pinHash: hash, pinSalt: salt };
+    await DB.put('settings', record);
+    STATE.security = record;
+    closeSheet();
+    showToast(mode === 'change' ? 'PIN atualizado' : 'Bloqueio por PIN ativado');
+  });
+
+  openSheet(mode === 'disable' ? 'Desativar bloqueio' : mode === 'change' ? 'Alterar PIN' : 'Ativar PIN', body);
+}
+
+/* ========================================================================
+   ECRÃ DE BLOQUEIO (mostrado no arranque, se houver PIN configurado)
+   ======================================================================== */
+function showLockScreen() {
+  document.body.classList.add('locked');
+  const overlay = el(`
+    <div class="lock-screen" id="lockScreen">
+      <div class="lock-screen__inner">
+        <p class="lock-screen__icon">${iconLock}</p>
+        <h1 class="display">Nubolso</h1>
+        <p class="lock-screen__sub">Introduz o teu PIN</p>
+        <div class="lock-dots" id="lockDots"><span></span><span></span><span></span><span></span></div>
+        <p class="lock-screen__error" id="lockError">PIN incorreto</p>
+        <div class="keypad" id="lockKeypad">
+          ${[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => `<button type="button" data-key="${n}">${n}</button>`).join('')}
+          <span></span>
+          <button type="button" data-key="0">0</button>
+          <button type="button" data-key="back" aria-label="Apagar">⌫</button>
+        </div>
+      </div>
+    </div>
+  `);
+  document.body.appendChild(overlay);
+
+  let entered = '';
+  const dots = qsa('#lockDots span', overlay);
+  const errorEl = qs('#lockError', overlay);
+  const inner = qs('.lock-screen__inner', overlay);
+
+  function updateDots() {
+    dots.forEach((d, i) => d.classList.toggle('filled', i < entered.length));
+  }
+
+  async function attempt() {
+    const hash = await hashPin(entered, STATE.security.pinSalt);
+    if (hash === STATE.security.pinHash) {
+      overlay.remove();
+      document.body.classList.remove('locked');
+    } else {
+      errorEl.style.visibility = 'visible';
+      inner.classList.add('shake');
+      setTimeout(() => inner.classList.remove('shake'), 320);
+      entered = '';
+      updateDots();
+    }
+  }
+
+  qs('#lockKeypad', overlay).addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-key]');
+    if (!btn) return;
+    errorEl.style.visibility = 'hidden';
+    if (btn.dataset.key === 'back') { entered = entered.slice(0, -1); updateDots(); return; }
+    if (entered.length >= 4) return;
+    entered += btn.dataset.key;
+    updateDots();
+    if (entered.length === 4) setTimeout(attempt, 140);
+  });
 }
 
 /* ========================================================================
@@ -253,6 +499,7 @@ function renderDashboard(main) {
   const saved = inc - exp;
 
   const wrap = el(`<div class="stack"></div>`);
+  main.appendChild(wrap);
 
   wrap.appendChild(el(`
     <div class="grid-2">
@@ -273,7 +520,7 @@ function renderDashboard(main) {
     </div>
   </div>`);
   wrap.appendChild(flowCard);
-  qs('#flowChartHolder', flowCard).appendChild(Charts.buildBarChart(flowData));
+  Charts.renderBarChart(qs('#flowChartHolder', flowCard), flowData);
 
   // Próximas contas
   const pendingBills = STATE.bills
@@ -309,8 +556,6 @@ function renderDashboard(main) {
     STATE.goals.slice(0, 3).forEach((g) => holder.appendChild(goalProgressRow(g)));
     wrap.appendChild(goalsCard);
   }
-
-  main.appendChild(wrap);
 }
 
 /* ========================================================================
@@ -464,7 +709,7 @@ function renderBudget(main) {
   const listCard = el(`<div class="card"><p class="section-title">Orçamento por categoria</p><div class="stack" id="budgetList"></div></div>`);
   const holder = qs('#budgetList', listCard);
 
-  EXPENSE_CATS.forEach((cat) => {
+  catList('expense').forEach((cat) => {
     const spent = monthTx.filter((t) => t.category === cat.name).reduce((s, t) => s + t.amount, 0);
     const limit = STATE.budgets[cat.name] || 0;
     totalLimit += limit;
@@ -657,7 +902,7 @@ function openBillSheet(existing) {
       <div class="field">
         <label>Categoria</label>
         <div class="chip-group" id="billCatChips">
-          ${EXPENSE_CATS.map((c) => `<button type="button" class="chip ${existing && existing.category === c.name ? 'active' : (!existing && c === EXPENSE_CATS[0]) ? 'active' : ''}" data-cat="${c.name}">${c.name}</button>`).join('')}
+          ${catList('expense').map((c) => `<button type="button" class="chip ${existing && existing.category === c.name ? 'active' : (!existing && c === catList('expense')[0]) ? 'active' : ''}" data-cat="${c.name}">${c.name}</button>`).join('')}
         </div>
       </div>
       <button type="submit" class="btn btn-accent btn-block">${existing ? 'Guardar alterações' : 'Adicionar conta'}</button>
@@ -679,7 +924,7 @@ function openBillSheet(existing) {
       name: f.name.value.trim(),
       amount: parseFloat(f.amount.value) || 0,
       dueDay: Math.min(31, Math.max(1, parseInt(f.dueDay.value, 10))),
-      category: activeChip ? activeChip.dataset.cat : EXPENSE_CATS[0].name,
+      category: activeChip ? activeChip.dataset.cat : catList('expense')[0].name,
       paidMonths: existing ? existing.paidMonths || [] : []
     };
     await DB.put('bills', record);
@@ -696,6 +941,7 @@ function openBillSheet(existing) {
    ======================================================================== */
 function renderInvestments(main) {
   const wrap = el(`<div class="stack"></div>`);
+  main.appendChild(wrap);
   wrap.appendChild(el(`<div class="stat"><div class="label">Patrimônio investido</div><div class="value" style="font-size:22px">${formatKz(totalInvestments())}</div></div>`));
 
   if (STATE.investments.length) {
@@ -705,7 +951,7 @@ function renderInvestments(main) {
     const donutData = Object.entries(byType).map(([label, value], idx) => ({ label, value, color: colors[idx % colors.length] }));
     const donutCard = el(`<div class="card"><p class="section-title">Distribuição por tipo</p><div id="invDonutHolder"></div></div>`);
     wrap.appendChild(donutCard);
-    donutCard.querySelector('#invDonutHolder').appendChild(Charts.buildDonutChart(donutData, 'Total', (v) => formatKz(v)));
+    Charts.renderDonutChart(qs('#invDonutHolder', donutCard), donutData, 'Total', (v) => formatKz(v));
   }
 
   const listCard = el(`<div class="card"><p class="section-title">Ativos <span class="mono">${STATE.investments.length}</span></p><div class="stack" id="invList"></div></div>`);
@@ -727,7 +973,6 @@ function renderInvestments(main) {
     });
   }
   wrap.appendChild(listCard);
-  main.appendChild(wrap);
 }
 
 function openInvestmentSheet(existing) {
@@ -768,6 +1013,7 @@ function openInvestmentSheet(existing) {
    ======================================================================== */
 function renderReports(main) {
   const wrap = el(`<div class="stack"></div>`);
+  main.appendChild(wrap);
 
   wrap.appendChild(el(`
     <div class="row-between card">
@@ -785,7 +1031,7 @@ function renderReports(main) {
   const donutCard = el(`<div class="card"><p class="section-title">Despesas por categoria</p><div id="reportDonutHolder"></div></div>`);
   wrap.appendChild(donutCard);
   if (donutData.length) {
-    qs('#reportDonutHolder', donutCard).appendChild(Charts.buildDonutChart(donutData, 'Gasto', (v) => formatKz(v)));
+    Charts.renderDonutChart(qs('#reportDonutHolder', donutCard), donutData, 'Gasto', (v) => formatKz(v));
   } else {
     qs('#reportDonutHolder', donutCard).appendChild(el(`<p style="font-size:12.5px;color:var(--text-dim);text-align:center;padding:20px 0">Sem despesas neste mês.</p>`));
   }
@@ -795,14 +1041,12 @@ function renderReports(main) {
   const flowData = months.map((k) => ({ label: MONTH_NAMES[Number(k.split('-')[1]) - 1].slice(0, 3), income: monthIncome(k), expense: monthExpense(k) }));
   const flowCard = el(`<div class="card"><p class="section-title">Receitas × Despesas · 6 meses</p><div id="reportBarHolder"></div></div>`);
   wrap.appendChild(flowCard);
-  qs('#reportBarHolder', flowCard).appendChild(Charts.buildBarChart(flowData));
+  Charts.renderBarChart(qs('#reportBarHolder', flowCard), flowData);
 
   const netData = months.map((k) => ({ label: MONTH_NAMES[Number(k.split('-')[1]) - 1].slice(0, 3), value: balanceUpToMonthEnd(k) + totalInvestments() }));
   const netCard = el(`<div class="card"><p class="section-title">Evolução do patrimônio</p><div id="reportLineHolder"></div></div>`);
   wrap.appendChild(netCard);
-  qs('#reportLineHolder', netCard).appendChild(Charts.buildLineChart(netData));
-
-  main.appendChild(wrap);
+  Charts.renderLineChart(qs('#reportLineHolder', netCard), netData);
 }
 
 /* ========================================================================
@@ -941,6 +1185,30 @@ document.addEventListener('click', async (e) => {
   if (action === 'report-month-prev') { UI.reportMonth = shiftMonth(UI.reportMonth, -1); render(); return; }
   if (action === 'report-month-next') { UI.reportMonth = shiftMonth(UI.reportMonth, 1); render(); return; }
 
+  if (action === 'open-categories-sheet') { openCategoriesSheet(); return; }
+  if (action === 'open-category-sheet') {
+    const cat = t.dataset.id ? STATE.categories.find((c) => c.id === t.dataset.id) : null;
+    openCategorySheet(cat, t.dataset.type);
+    return;
+  }
+  if (action === 'delete-category') {
+    const inUse = STATE.transactions.some((tx) => tx.category === STATE.categories.find((c) => c.id === t.dataset.id)?.name);
+    const msg = inUse
+      ? 'Esta categoria já tem lançamentos associados. Eles manterão o nome da categoria, mas ela deixará de aparecer nas listas. Eliminar mesmo assim?'
+      : 'Eliminar esta categoria?';
+    if (confirm(msg)) {
+      await DB.delete('categories', t.dataset.id);
+      await loadState();
+      closeSheet();
+      render();
+      showToast('Categoria eliminada');
+    }
+    return;
+  }
+
+  if (action === 'open-security-sheet') { openSecuritySheet(); return; }
+  if (action === 'open-pin-form') { openPinFormSheet(t.dataset.mode); return; }
+
   if (action === 'export-data') { exportData(); return; }
   if (action === 'trigger-import') { qs('#importInput').click(); return; }
   if (action === 'wipe-data') { wipeAllData(); return; }
@@ -1013,6 +1281,18 @@ function hideUpdateBanner() {
   routeFromHash();
   await loadState();
   render();
+
+  // App Shortcuts (long-press no ícone) chegam com ?action=... na URL
+  const shortcutAction = new URLSearchParams(location.search).get('action');
+  if (shortcutAction === 'new-tx') openTransactionSheet();
+  if (shortcutAction === 'new-goal') openGoalSheet();
+  if (shortcutAction) {
+    history.replaceState(null, '', location.pathname + location.hash);
+  }
+
+  if (STATE.security && STATE.security.pinHash) {
+    showLockScreen();
+  }
 
   if ('serviceWorker' in navigator) {
     try {

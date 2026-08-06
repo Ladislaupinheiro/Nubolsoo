@@ -3,7 +3,7 @@
    Sem dependências externas. API baseada em Promises.
    ========================================================= */
 const DB_NAME = 'financas-db';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 const STORES = {
   transactions: 'id',
@@ -11,6 +11,7 @@ const STORES = {
   goals: 'id',
   bills: 'id',
   investments: 'id',
+  categories: 'id',
   settings: 'key'
 };
 
