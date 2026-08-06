@@ -546,7 +546,7 @@ hr.rule { border: none; border-top: 1px solid var(--border-soft); margin: 12px 0
 .update-banner__actions { display: flex; gap: 6px; flex-shrink: 0; }
 
 /* =========================== Lock screen (bloqueio por PIN) =========================== */
-body.locked #app, body.locked .fab, body.locked .bottomnav { visibility: hidden; }
+body.locked #app, body.locked .fab, body.locked .bottomnav, body.locked .sidebar { visibility: hidden; }
 
 .lock-screen {
   position: fixed;
@@ -616,4 +616,64 @@ body.locked #app, body.locked .fab, body.locked .bottomnav { visibility: hidden;
 
 @media (min-width: 561px) {
   #app { border-left: 1px solid var(--border); border-right: 1px solid var(--border); }
+}
+
+/* =========================== Desktop (sidebar + layout largo) =========================== */
+.sidebar { display: none; }
+
+@media (min-width: 880px) {
+  body { padding-left: 232px; }
+
+  .sidebar {
+    display: flex;
+    flex-direction: column;
+    position: fixed;
+    top: 0; left: 0; bottom: 0;
+    width: 232px;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    padding: 20px 14px calc(20px + var(--safe-bottom));
+    overflow-y: auto;
+    z-index: 20;
+  }
+  .sidebar__brand {
+    font-family: var(--font-display);
+    font-size: 17px;
+    font-weight: 700;
+    padding: 4px 10px 22px;
+  }
+  .sidebar__nav { display: flex; flex-direction: column; gap: 2px; flex: 1; }
+  .sidebar__footer { border-top: 1px solid var(--border-soft); padding-top: 10px; margin-top: 10px; }
+  .sidebar__item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    border: none;
+    background: none;
+    color: var(--text-muted);
+    padding: 10px 10px;
+    border-radius: 8px;
+    font-size: 13.5px;
+    font-weight: 500;
+    text-align: left;
+  }
+  .sidebar__item svg { width: 18px; height: 18px; flex-shrink: 0; }
+  .sidebar__item:hover { background: var(--surface-3); color: var(--text); }
+  .sidebar__item.active { background: var(--accent-soft); color: var(--accent-text); }
+
+  .bottomnav { display: none; }
+  #app { padding-bottom: 100px; max-width: 760px; margin: 0 auto; }
+  .fab { right: 32px; bottom: 32px; max-width: none; }
+
+  .sheet-overlay { align-items: center; padding: 24px; }
+  .sheet {
+    border-radius: var(--radius-lg);
+    border-bottom: 1px solid var(--border);
+    max-width: 480px;
+    max-height: 84vh;
+  }
+
+  .toast { left: calc(50% + 116px); }
+  .update-banner { left: calc(232px + 12px); right: 12px; margin: 0 auto; }
 }

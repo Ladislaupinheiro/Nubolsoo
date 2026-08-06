@@ -432,6 +432,36 @@ const NAV_ITEMS = [
   { id: 'mais', label: 'Mais', icon: iconMore }
 ];
 
+/* Sidebar de desktop: mostra mais itens de primeiro nível de uma vez, já que há espaço. */
+const SIDEBAR_ITEMS = [
+  { id: 'dashboard', label: 'Início', icon: iconHome },
+  { id: 'transacoes', label: 'Lançar', icon: iconSwap },
+  { id: 'orcamento', label: 'Orçamento', icon: iconPie },
+  { id: 'bi', label: 'BI', icon: iconChart },
+  { id: 'contas', label: 'Contas', icon: iconReceipt },
+  { id: 'dividas', label: 'Kilapes', icon: iconHandshake },
+  { id: 'investimentos', label: 'Investimentos', icon: iconTrend },
+  { id: 'metas', label: 'Metas', icon: iconTarget }
+];
+
+function renderSidebar() {
+  const sidebar = qs('#sidebar');
+  if (!sidebar) return;
+  sidebar.innerHTML = `
+    <div class="sidebar__brand">💼 Nubolso</div>
+    <div class="sidebar__nav">
+      ${SIDEBAR_ITEMS.map((item) => `
+        <button class="sidebar__item ${UI.tab === item.id ? 'active' : ''}" data-action="nav" data-tab="${item.id}">
+          ${item.icon}<span>${item.label}</span>
+        </button>
+      `).join('')}
+    </div>
+    <div class="sidebar__footer">
+      <button class="sidebar__item ${UI.tab === 'mais' ? 'active' : ''}" data-action="nav" data-tab="mais">${iconMore}<span>Mais</span></button>
+    </div>
+  `;
+}
+
 function renderBottomNav() {
   const nav = qs('#bottomnav');
   nav.innerHTML = NAV_ITEMS.map((item) => `
@@ -699,6 +729,7 @@ function showLockScreen() {
 function render() {
   renderTopbar();
   renderBottomNav();
+  renderSidebar();
   const main = qs('#main');
   main.innerHTML = '';
   const fab = qs('#fab');

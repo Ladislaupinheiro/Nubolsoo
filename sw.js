@@ -1,7 +1,7 @@
 /* =========================================================
    sw.js — Service Worker (cache-first, app shell offline)
    ========================================================= */
-const CACHE_NAME = 'nubolso-v8';
+const CACHE_NAME = 'nubolso-v9';
 const APP_SHELL = [
   './',
   './index.html',
