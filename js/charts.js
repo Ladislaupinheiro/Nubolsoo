@@ -98,20 +98,23 @@ function renderDonutChart(container, data, centerLabel, formatter) {
 }
 
 /**
- * Renderiza um gráfico de barras (receitas vs despesas) dentro de `container`.
- * data: [{ label, income, expense }]
+ * Renderiza um gráfico de barras de 2 séries dentro de `container`.
+ * data: [{ label, income, expense }] (nomes de campo mantidos por compatibilidade)
+ * opts: { seriesNames: [nomeA, nomeB], colors: [corA, corB], height }
  */
-function renderBarChart(container, data) {
+function renderBarChart(container, data, opts) {
   if (!container) return null;
   container.innerHTML = '';
   const t = chartTokens();
+  const seriesNames = (opts && opts.seriesNames) || ['Receitas', 'Despesas'];
+  const colors = (opts && opts.colors) || [t.emerald, t.rust];
   const options = {
-    ...baseOptions({ type: 'bar', height: 200 }),
+    ...baseOptions({ type: 'bar', height: (opts && opts.height) || 200 }),
     series: [
-      { name: 'Receitas', data: data.map((d) => d.income) },
-      { name: 'Despesas', data: data.map((d) => d.expense) }
+      { name: seriesNames[0], data: data.map((d) => d.income) },
+      { name: seriesNames[1], data: data.map((d) => d.expense) }
     ],
-    colors: [t.emerald, t.rust],
+    colors,
     plotOptions: { bar: { columnWidth: '55%', borderRadius: 3, borderRadiusApplication: 'end' } },
     dataLabels: { enabled: false },
     xaxis: {
@@ -158,4 +161,39 @@ function renderLineChart(container, points) {
   return chart;
 }
 
-window.Charts = { renderDonutChart, renderBarChart, renderLineChart };
+/**
+ * Renderiza um gráfico de linha com histórico + projeção (tracejada) dentro de `container`.
+ * points: [{ label, value, projected }] — `projected: true` marca os pontos futuros.
+ */
+function renderForecastChart(container, points) {
+  if (!container) return null;
+  container.innerHTML = '';
+  const t = chartTokens();
+  const firstProjIdx = points.findIndex((p) => p.projected);
+  const histSeries = points.map((p, i) => (p.projected ? null : p.value));
+  const projSeries = points.map((p, i) => (p.projected || i === firstProjIdx - 1 ? p.value : null));
+  const options = {
+    ...baseOptions({ type: 'line', height: 180 }),
+    series: [
+      { name: 'Histórico', data: histSeries },
+      { name: 'Projeção', data: projSeries }
+    ],
+    colors: [t.accent, t.dim],
+    stroke: { curve: 'straight', width: [2, 2], dashArray: [0, 5] },
+    dataLabels: { enabled: false },
+    markers: { size: 3, strokeWidth: 0 },
+    xaxis: {
+      categories: points.map((p) => p.label),
+      labels: { style: { colors: t.dim, fontSize: '10px', fontFamily: t.mono } },
+      axisBorder: { show: false },
+      axisTicks: { show: false }
+    },
+    yaxis: { labels: { show: false } },
+    legend: { show: false }
+  };
+  const chart = new ApexCharts(container, options);
+  chart.render();
+  return chart;
+}
+
+window.Charts = { renderDonutChart, renderBarChart, renderLineChart, renderForecastChart };

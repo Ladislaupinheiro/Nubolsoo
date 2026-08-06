@@ -38,10 +38,10 @@
       "icons": [{ "src": "./icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
     },
     {
-      "name": "Relatórios",
-      "short_name": "Relatórios",
-      "description": "Ver relatórios e gráficos do mês",
-      "url": "./index.html#/relatorios",
+      "name": "BI · Relatórios",
+      "short_name": "BI",
+      "description": "Ver indicadores, tendências e projeções financeiras",
+      "url": "./index.html#/bi",
       "icons": [{ "src": "./icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
     }
   ]
