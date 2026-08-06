@@ -12,7 +12,15 @@ const DEFAULT_EXPENSE_CATS = [
   { name: 'Educação', color: '#8b6dae' },
   { name: 'Lazer', color: '#d4915d' },
   { name: 'Compras', color: '#5ea8a0' },
-  { name: 'Outros', color: '#8fa396' }
+  { name: 'Outros', color: '#8fa396' },
+  { name: 'Roupas do Dia a Dia', color: '#6fb88a' },
+  { name: 'Ocasiões Especiais', color: '#a8763e' },
+  { name: 'Calçados & Acessórios', color: '#5a7fc4' },
+  { name: 'Manutenção de Roupas', color: '#c46f9e' },
+  { name: 'Apoio Familiar / Emergências', color: '#9c7b4f' },
+  { name: 'Social & Lazer Informal', color: '#5b8fae' },
+  { name: 'Pequenos Gastos', color: '#a55b6b' },
+  { name: 'Manutenção Doméstica', color: '#7fa65a' }
 ];
 const DEFAULT_INCOME_CATS = [
   { name: 'Salário', color: '#4fa37b' },
@@ -20,12 +28,12 @@ const DEFAULT_INCOME_CATS = [
   { name: 'Investimentos', color: '#c9a227' },
   { name: 'Outros', color: '#8fa396' }
 ];
-const CATEGORY_PALETTE = ['#c9a227', '#4fa37b', '#c0563e', '#7a8fa6', '#8b6dae', '#d4915d', '#5ea8a0', '#8fa396', '#6fb88a', '#a8763e', '#5a7fc4', '#c46f9e'];
+const CATEGORY_PALETTE = ['#c9a227', '#4fa37b', '#c0563e', '#7a8fa6', '#8b6dae', '#d4915d', '#5ea8a0', '#8fa396', '#6fb88a', '#a8763e', '#5a7fc4', '#c46f9e', '#9c7b4f', '#5b8fae', '#a55b6b', '#7fa65a'];
 const INVESTMENT_TYPES = ['Poupança', 'Ações', 'Fundos', 'Imóveis', 'Criptomoeda', 'Outros'];
 const MONTH_NAMES = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
 
 /* ----------------------- Estado global ----------------------- */
-let STATE = { transactions: [], budgets: {}, goals: [], bills: [], investments: [], categories: [], security: null };
+let STATE = { transactions: [], budgets: {}, goals: [], bills: [], investments: [], categories: [], security: null, debts: [], debtPayments: [] };
 let UI = {
   tab: 'dashboard',
   txMonth: currentMonthKey(),
@@ -94,6 +102,36 @@ function monthExpense(key) { return txForMonth(key).filter((t) => t.type === 'ex
 function totalBalance() { return STATE.transactions.reduce((s, t) => s + (t.type === 'income' ? t.amount : -t.amount), 0); }
 function totalInvestments() { return STATE.investments.reduce((s, i) => s + i.value, 0); }
 function netWorth() { return totalBalance() + totalInvestments(); }
+
+/* ----------------------- Dívidas & Kilapes ----------------------- */
+function debtsByDirection(direction) { return STATE.debts.filter((d) => d.direction === direction && !d.settled); }
+function totalOwedByMe() { return debtsByDirection('devo').reduce((s, d) => s + d.remainingAmount, 0); }
+function totalOwedToMe() { return debtsByDirection('a_receber').reduce((s, d) => s + d.remainingAmount, 0); }
+function paymentsForDebt(debtId) {
+  return STATE.debtPayments.filter((p) => p.debtId === debtId).sort((a, b) => b.date.localeCompare(a.date));
+}
+function debtStatus(d) {
+  if (d.settled) return 'paid';
+  if (!d.dueDate) return 'pending';
+  return d.dueDate < todayISO() ? 'overdue' : 'pending';
+}
+/** Score de confiança: com base no histórico de kilapes já liquidados desta pessoa (só faz sentido para "a_receber") */
+function personTrustBadge(person) {
+  const settledOnes = STATE.debts.filter((d) => d.direction === 'a_receber' && d.person === person && d.settled);
+  if (settledOnes.length < 2) return null; // histórico curto demais para dizer algo útil
+  const onTime = settledOnes.filter((d) => !d.dueDate || !d.settledAt || d.settledAt <= d.dueDate).length;
+  const ratio = onTime / settledOnes.length;
+  if (ratio >= 0.8) return { label: 'Bom pagador', cls: 'paid' };
+  if (ratio >= 0.5) return { label: 'Pagamentos irregulares', cls: 'pending' };
+  return { label: 'Atrasos frequentes', cls: 'overdue' };
+}
+function whatsappReminderUrl(debt) {
+  const valor = formatKz(debt.remainingAmount);
+  const prazo = debt.dueDate ? ` combinado para ${debt.dueDate.split('-').reverse().join('/')}` : ' que ficou combinado';
+  const msg = `Olá ${debt.person}! Só a passar para lembrar do valor de ${valor}${prazo}. Qualquer coisa, fala comigo. Obrigado(a)! 🙂`;
+  const digits = (debt.phone || '').replace(/\D/g, '');
+  return digits ? `https://wa.me/${digits}?text=${encodeURIComponent(msg)}` : `https://wa.me/?text=${encodeURIComponent(msg)}`;
+}
 function balanceUpToMonthEnd(key) {
   return STATE.transactions
     .filter((t) => t.date.slice(0, 7) <= key)
@@ -102,8 +140,9 @@ function balanceUpToMonthEnd(key) {
 
 /* ----------------------- Carregamento inicial ----------------------- */
 async function loadState() {
-  const [transactions, budgetsArr, goals, bills, investments, categories, security] = await Promise.all([
-    DB.getAll('transactions'), DB.getAll('budgets'), DB.getAll('goals'), DB.getAll('bills'), DB.getAll('investments'), DB.getAll('categories'), DB.get('settings', 'security')
+  const [transactions, budgetsArr, goals, bills, investments, categories, security, debts, debtPayments] = await Promise.all([
+    DB.getAll('transactions'), DB.getAll('budgets'), DB.getAll('goals'), DB.getAll('bills'), DB.getAll('investments'),
+    DB.getAll('categories'), DB.get('settings', 'security'), DB.getAll('debts'), DB.getAll('debtPayments')
   ]);
   STATE.transactions = transactions.sort((a, b) => (b.date + b.id).localeCompare(a.date + a.id));
   STATE.budgets = {};
@@ -113,6 +152,8 @@ async function loadState() {
   STATE.investments = investments;
   STATE.categories = categories;
   STATE.security = security || null;
+  STATE.debts = debts.sort((a, b) => (a.dueDate || '9999').localeCompare(b.dueDate || '9999'));
+  STATE.debtPayments = debtPayments;
 
   if (STATE.categories.length === 0) {
     const seeds = [
@@ -121,6 +162,22 @@ async function loadState() {
     ];
     for (const s of seeds) await DB.put('categories', s);
     STATE.categories = seeds;
+  }
+
+  // Migração não-destrutiva: acrescenta as categorias mais realistas (roupas
+  // desdobradas, apoio familiar, etc.) a instalações já existentes, sem
+  // duplicar e sem mexer nas categorias que o utilizador já personalizou.
+  // Corre uma única vez, controlado por uma flag em 'settings'.
+  const catMigration = await DB.get('settings', 'catSeedV1');
+  if (!catMigration) {
+    const existing = new Set(STATE.categories.map((c) => `${c.type}:${c.name.toLowerCase()}`));
+    const toAdd = DEFAULT_EXPENSE_CATS.filter((c) => !existing.has(`expense:${c.name.toLowerCase()}`));
+    for (const c of toAdd) {
+      const rec = { id: DB.uid(), name: c.name, type: 'expense', color: c.color };
+      await DB.put('categories', rec);
+      STATE.categories.push(rec);
+    }
+    await DB.put('settings', { key: 'catSeedV1', applied: true });
   }
 }
 
@@ -181,6 +238,7 @@ const iconChevronLeft = icon('<path d="M15 18l-6-6 6-6"/>');
 const iconChevronRight = icon('<path d="M9 18l6-6-6-6"/>');
 const iconTag = icon('<path d="M20.59 13.41 11 3.83A2 2 0 0 0 9.59 3.24L4 3a1 1 0 0 0-1 1l.24 5.59a2 2 0 0 0 .59 1.41l9.58 9.59a2 2 0 0 0 2.83 0l4.35-4.35a2 2 0 0 0 0-2.83z"/><circle cx="7.5" cy="7.5" r="1.2" fill="currentColor" stroke="none"/>');
 const iconLock = icon('<rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>');
+const iconHandshake = icon('<path d="M8.5 14.5 3 9l4-4 3.5 3.5"/><path d="M15.5 14.5 21 9l-4-4-3.5 3.5"/><path d="M8.5 14.5 11 17l2-2 2 2 2.5-2.5"/>');
 
 /* ========================================================================
    TOPBAR & NAVEGAÇÃO
@@ -228,6 +286,7 @@ function openMoreSheet() {
   const body = el(`
     <div class="stack">
       <button class="btn btn-block" style="justify-content:flex-start" data-action="nav-more" data-tab="contas">${iconReceipt} &nbsp; Contas a pagar</button>
+      <button class="btn btn-block" style="justify-content:flex-start" data-action="nav-more" data-tab="dividas">${iconHandshake} &nbsp; Dívidas & Kilapes</button>
       <button class="btn btn-block" style="justify-content:flex-start" data-action="nav-more" data-tab="investimentos">${iconTrend} &nbsp; Investimentos</button>
       <button class="btn btn-block" style="justify-content:flex-start" data-action="nav-more" data-tab="relatorios">${iconChart} &nbsp; Relatórios</button>
       <hr class="rule">
@@ -483,6 +542,7 @@ function render() {
     case 'orcamento': renderBudget(main); fab.hidden = true; break;
     case 'metas': renderGoals(main); fab.dataset.action = 'open-goal-sheet'; fab.title = 'Nova meta'; break;
     case 'contas': renderBills(main); fab.dataset.action = 'open-bill-sheet'; fab.title = 'Nova conta'; break;
+    case 'dividas': renderDebts(main); fab.dataset.action = 'open-debt-sheet'; fab.title = 'Novo kilape'; break;
     case 'investimentos': renderInvestments(main); fab.dataset.action = 'open-investment-sheet'; fab.title = 'Novo ativo'; break;
     case 'relatorios': renderReports(main); fab.hidden = true; break;
     default: renderDashboard(main); fab.dataset.action = 'open-tx-sheet';
@@ -548,6 +608,20 @@ function renderDashboard(main) {
     });
   }
   wrap.appendChild(billsCard);
+
+  // Kilapes em aberto
+  const openDebts = STATE.debts.filter((d) => !d.settled);
+  if (openDebts.length) {
+    wrap.appendChild(el(`
+      <div class="card" data-action="nav" data-tab="dividas" style="cursor:pointer">
+        <p class="section-title">Kilapes <span style="font-size:11px">ver todos ›</span></p>
+        <div class="grid-2">
+          <div class="stat"><div class="label">Eu devo</div><div class="value neg" style="font-size:15px">${formatKz(totalOwedByMe())}</div></div>
+          <div class="stat"><div class="label">Me devem</div><div class="value pos" style="font-size:15px">${formatKz(totalOwedToMe())}</div></div>
+        </div>
+      </div>
+    `));
+  }
 
   // Metas em progresso
   if (STATE.goals.length) {
@@ -937,6 +1011,216 @@ function openBillSheet(existing) {
 }
 
 /* ========================================================================
+   DÍVIDAS & KILAPES
+   ======================================================================== */
+function sortDebtsForList(list) {
+  return [...list].sort((a, b) => (a.settled === b.settled ? 0 : a.settled ? 1 : -1));
+}
+
+function debtRow(d) {
+  const status = debtStatus(d);
+  const stampCls = d.settled ? 'paid' : status;
+  const stampLabel = d.settled ? 'Pago' : (status === 'overdue' ? 'Atrasado' : 'Em aberto');
+  const sub = [];
+  if (d.remainingAmount < d.originalAmount && !d.settled) sub.push(`de ${formatKz(d.originalAmount)}`);
+  if (d.dueDate) sub.push(d.dueDate.split('-').reverse().join('/'));
+  const trust = d.direction === 'a_receber' ? personTrustBadge(d.person) : null;
+  if (trust) {
+    const emoji = trust.cls === 'paid' ? '🟢' : trust.cls === 'pending' ? '🟡' : '🔴';
+    sub.push(`${emoji} ${trust.label}`);
+  }
+  return el(`
+    <div class="list-item" data-action="open-debt-sheet" data-id="${d.id}" style="cursor:pointer">
+      ${catDotHtml(d.person, d.direction === 'devo' ? 'expense' : 'income')}
+      <div class="list-item__body">
+        <div class="list-item__title">${escapeHtml(d.person)}</div>
+        <div class="list-item__sub">${sub.join(' · ') || '&nbsp;'}</div>
+      </div>
+      <div class="stack" style="align-items:flex-end;gap:4px">
+        <div class="list-item__amount">${formatKz(d.remainingAmount)}</div>
+        <span class="stamp ${stampCls}" style="transform:none;font-size:9px;padding:1px 7px">${stampLabel}</span>
+      </div>
+    </div>
+  `);
+}
+
+function renderDebts(main) {
+  const wrap = el(`<div class="stack"></div>`);
+  main.appendChild(wrap);
+
+  wrap.appendChild(el(`
+    <div class="grid-2">
+      <div class="stat"><div class="label">Eu devo</div><div class="value neg">${formatKz(totalOwedByMe())}</div></div>
+      <div class="stat"><div class="label">Me devem</div><div class="value pos">${formatKz(totalOwedToMe())}</div></div>
+    </div>
+  `));
+
+  const receberList = sortDebtsForList(STATE.debts.filter((d) => d.direction === 'a_receber'));
+  const receberCard = el(`<div class="card"><p class="section-title">Me devem <span class="mono">${receberList.length}</span></p><div class="stack" id="debtsReceberList"></div></div>`);
+  wrap.appendChild(receberCard);
+  const receberHolder = qs('#debtsReceberList', receberCard);
+  if (!receberList.length) {
+    receberHolder.appendChild(el(`<div class="empty"><p class="display">Ninguém te deve nada</p><p>Vendeste a fiado ou emprestaste dinheiro? Toca em + para registar.</p></div>`));
+  } else {
+    receberList.forEach((d) => receberHolder.appendChild(debtRow(d)));
+  }
+
+  const devoList = sortDebtsForList(STATE.debts.filter((d) => d.direction === 'devo'));
+  const devoCard = el(`<div class="card"><p class="section-title">Eu devo <span class="mono">${devoList.length}</span></p><div class="stack" id="debtsDevoList"></div></div>`);
+  wrap.appendChild(devoCard);
+  const devoHolder = qs('#debtsDevoList', devoCard);
+  if (!devoList.length) {
+    devoHolder.appendChild(el(`<div class="empty"><p class="display">Não deves nada a ninguém</p><p>Se tens algum kilape em aberto, toca em + para registar.</p></div>`));
+  } else {
+    devoList.forEach((d) => devoHolder.appendChild(debtRow(d)));
+  }
+}
+
+function openDebtSheet(existing, forcedDirection) {
+  const direction = forcedDirection || (existing ? existing.direction : 'a_receber');
+  const hasPayments = existing ? paymentsForDebt(existing.id).length > 0 : false;
+
+  const body = el(`
+    <div class="stack">
+      <form class="stack" id="debtForm">
+        <div class="segmented" id="debtDirSeg">
+          <button type="button" class="${direction === 'a_receber' ? 'active income' : ''}" data-dir="a_receber">Me devem</button>
+          <button type="button" class="${direction === 'devo' ? 'active expense' : ''}" data-dir="devo">Eu devo</button>
+        </div>
+        <div class="field">
+          <label>${direction === 'devo' ? 'A quem devo' : 'Quem me deve'}</label>
+          <input type="text" name="person" value="${existing ? escapeHtml(existing.person) : ''}" placeholder="Nome" required autofocus>
+        </div>
+        <div class="field">
+          <label>Valor${hasPayments ? ' original' : ''} (Kz)</label>
+          <input type="number" inputmode="decimal" step="0.01" min="0.01" name="amount" value="${existing ? existing.originalAmount : ''}" placeholder="0,00" ${hasPayments ? 'readonly' : ''} required>
+          ${hasPayments ? `<span style="font-size:11px;color:var(--text-dim)">Já há abatimentos registados — usa "Registar abatimento" para atualizar o valor em falta.</span>` : ''}
+        </div>
+        <div class="field">
+          <label>Data combinada (opcional)</label>
+          <input type="date" name="dueDate" value="${existing && existing.dueDate ? existing.dueDate : ''}">
+        </div>
+        <div class="field">
+          <label>Telefone (opcional, para lembrete via WhatsApp)</label>
+          <input type="tel" name="phone" value="${existing && existing.phone ? escapeHtml(existing.phone) : ''}" placeholder="Ex: 244923456789">
+        </div>
+        <div class="field">
+          <label>Nota (opcional)</label>
+          <textarea name="note" placeholder="Ex: venda a fiado de roupa">${existing && existing.note ? escapeHtml(existing.note) : ''}</textarea>
+        </div>
+        <button type="submit" class="btn btn-accent btn-block">${existing ? 'Guardar alterações' : 'Registar kilape'}</button>
+      </form>
+      ${existing ? `
+        <hr class="rule">
+        <div class="row-between">
+          <p class="section-title" style="margin:0">Falta pagar</p>
+          <span class="mono" style="font-size:16px;font-weight:700">${formatKz(existing.remainingAmount)}</span>
+        </div>
+        ${!existing.settled
+          ? `<button type="button" class="btn btn-block" data-action="open-debt-payment-sheet" data-id="${existing.id}">Registar abatimento</button>`
+          : `<p style="font-size:12.5px;color:var(--emerald);text-align:center;margin:0">✓ Kilape totalmente liquidado</p>`}
+        ${direction === 'a_receber' && !existing.settled
+          ? `<a class="btn btn-block btn-ghost" href="${whatsappReminderUrl(existing)}" target="_blank" rel="noopener">${iconHandshake} &nbsp; Enviar lembrete no WhatsApp</a>`
+          : ''}
+        <div class="stack" id="debtPaymentsList"></div>
+        <button type="button" class="btn btn-block btn-danger" data-action="delete-debt" data-id="${existing.id}">Eliminar kilape</button>
+      ` : ''}
+    </div>
+  `);
+
+  qsa('#debtDirSeg button', body).forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (btn.dataset.dir === direction) return;
+      closeSheet();
+      openDebtSheet(existing, btn.dataset.dir);
+    });
+  });
+
+  qs('#debtForm', body).addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    const activeDir = qs('#debtDirSeg button.active', body).dataset.dir;
+    const amount = parseFloat(f.amount.value) || 0;
+    if (amount <= 0) { showToast('Informa um valor válido'); return; }
+    const record = existing ? { ...existing } : { id: DB.uid(), settled: false, settledAt: null, createdAt: todayISO() };
+    record.direction = activeDir;
+    record.person = f.person.value.trim();
+    record.dueDate = f.dueDate.value || null;
+    record.phone = f.phone.value.trim();
+    record.note = f.note.value.trim();
+    if (!hasPayments) {
+      record.originalAmount = amount;
+      record.remainingAmount = amount;
+    }
+    await DB.put('debts', record);
+    await loadState();
+    closeSheet();
+    render();
+    showToast(existing ? 'Kilape atualizado' : 'Kilape registado');
+  });
+
+  if (existing) {
+    const payHolder = qs('#debtPaymentsList', body);
+    const payments = paymentsForDebt(existing.id);
+    if (payments.length) {
+      payHolder.appendChild(el(`<p class="section-title" style="margin-top:8px">Histórico de abatimentos</p>`));
+      payments.forEach((p) => {
+        payHolder.appendChild(el(`
+          <div class="list-item">
+            <div class="list-item__body">
+              <div class="list-item__title">${formatKz(p.amount)}</div>
+              <div class="list-item__sub">${p.date.split('-').reverse().join('/')}${p.note ? ' · ' + escapeHtml(p.note) : ''}</div>
+            </div>
+          </div>
+        `));
+      });
+    }
+  }
+
+  openSheet(existing ? 'Editar kilape' : 'Novo kilape', body);
+}
+
+function openDebtPaymentSheet(debtId) {
+  const debt = STATE.debts.find((d) => d.id === debtId);
+  if (!debt) return;
+  const body = el(`
+    <form class="stack" id="debtPaymentForm">
+      <p style="font-size:12.5px;color:var(--text-dim);margin:0">Falta pagar ${formatKz(debt.remainingAmount)} de ${formatKz(debt.originalAmount)}.</p>
+      <div class="field">
+        <label>Valor do abatimento (Kz)</label>
+        <input type="number" inputmode="decimal" step="0.01" min="0.01" max="${debt.remainingAmount}" name="amount" value="${debt.remainingAmount}" required autofocus>
+      </div>
+      <div class="field">
+        <label>Data</label>
+        <input type="date" name="date" value="${todayISO()}">
+      </div>
+      <div class="field">
+        <label>Nota (opcional)</label>
+        <input type="text" name="note" placeholder="Ex: pagamento parcial em dinheiro">
+      </div>
+      <button type="submit" class="btn btn-accent btn-block">Registar abatimento</button>
+    </form>
+  `);
+  body.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    let amount = parseFloat(f.amount.value) || 0;
+    if (amount <= 0) { showToast('Informa um valor válido'); return; }
+    amount = Math.min(amount, debt.remainingAmount);
+    const payment = { id: DB.uid(), debtId, amount, date: f.date.value || todayISO(), note: f.note.value.trim() };
+    await DB.put('debtPayments', payment);
+    debt.remainingAmount = Math.round((debt.remainingAmount - amount) * 100) / 100;
+    if (debt.remainingAmount <= 0) { debt.remainingAmount = 0; debt.settled = true; debt.settledAt = payment.date; }
+    await DB.put('debts', debt);
+    await loadState();
+    closeSheet();
+    render();
+    showToast('Abatimento registado');
+  });
+  openSheet('Registar abatimento', body);
+}
+
+/* ========================================================================
    INVESTIMENTOS
    ======================================================================== */
 function renderInvestments(main) {
@@ -1080,7 +1364,7 @@ async function importDataFromFile(file) {
 }
 async function wipeAllData() {
   if (!confirm('Isto apagará TODOS os dados do app permanentemente. Continuar?')) return;
-  await Promise.all(['transactions', 'budgets', 'goals', 'bills', 'investments'].map((s) => DB.clear(s)));
+  await Promise.all(['transactions', 'budgets', 'goals', 'bills', 'investments', 'categories', 'debts', 'debtPayments'].map((s) => DB.clear(s)));
   await loadState();
   closeSheet();
   render();
@@ -1166,6 +1450,25 @@ document.addEventListener('click', async (e) => {
   if (action === 'bills-month-prev') { UI.billsMonth = shiftMonth(UI.billsMonth, -1); render(); return; }
   if (action === 'bills-month-next') { UI.billsMonth = shiftMonth(UI.billsMonth, 1); render(); return; }
 
+  if (action === 'open-debt-sheet') {
+    const d = t.dataset.id ? STATE.debts.find((x) => x.id === t.dataset.id) : null;
+    openDebtSheet(d);
+    return;
+  }
+  if (action === 'open-debt-payment-sheet') { openDebtPaymentSheet(t.dataset.id); return; }
+  if (action === 'delete-debt') {
+    if (confirm('Eliminar este kilape? O histórico de abatimentos também será apagado.')) {
+      const payments = paymentsForDebt(t.dataset.id);
+      for (const p of payments) await DB.delete('debtPayments', p.id);
+      await DB.delete('debts', t.dataset.id);
+      await loadState();
+      closeSheet();
+      render();
+      showToast('Kilape eliminado');
+    }
+    return;
+  }
+
   if (action === 'open-investment-sheet') {
     const i = t.dataset.id ? STATE.investments.find((x) => x.id === t.dataset.id) : null;
     openInvestmentSheet(i);
@@ -1245,7 +1548,7 @@ window.addEventListener('beforeinstallprompt', (e) => {
 
 function routeFromHash() {
   const h = location.hash.replace('#/', '');
-  const valid = ['dashboard', 'transacoes', 'orcamento', 'metas', 'contas', 'investimentos', 'relatorios'];
+  const valid = ['dashboard', 'transacoes', 'orcamento', 'metas', 'contas', 'dividas', 'investimentos', 'relatorios'];
   UI.tab = valid.includes(h) ? h : 'dashboard';
 }
 window.addEventListener('hashchange', () => { routeFromHash(); render(); });
