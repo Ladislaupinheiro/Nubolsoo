@@ -138,6 +138,169 @@ function balanceUpToMonthEnd(key) {
     .reduce((s, t) => s + (t.type === 'income' ? t.amount : -t.amount), 0);
 }
 
+/* ========================================================================
+   PERSONAL INTELLIGENCE (PI) — heurísticas locais, sem IA externa
+   Tudo calculado a partir do que já está em STATE, 100% offline.
+   ======================================================================== */
+
+/** Projeta, ao ritmo de gastos atual, se/quando o saldo do mês fica apertado. */
+function spendingPaceInsight(mKey) {
+  if (mKey !== currentMonthKey()) return null;
+  const dayOfMonth = new Date().getDate();
+  const totalDays = daysInMonth(mKey);
+  const inc = monthIncome(mKey);
+  const exp = monthExpense(mKey);
+  if (exp <= 0 || inc <= 0) return null;
+
+  const dailyAvg = exp / dayOfMonth;
+  const remaining = inc - exp;
+
+  if (remaining <= 0) {
+    return { level: 'red', text: `Já gastaste ${formatKz(exp)} este mês, mais do que as receitas de ${formatKz(inc)}.` };
+  }
+  const daysAfford = Math.floor(remaining / dailyAvg);
+  const projectedDay = dayOfMonth + daysAfford;
+
+  if (projectedDay >= totalDays) {
+    return { level: 'green', text: `No ritmo atual de gastos, o saldo do mês dá tranquilamente até ao dia ${totalDays}.` };
+  }
+  return {
+    level: projectedDay - dayOfMonth <= 4 ? 'red' : 'yellow',
+    text: `No ritmo atual de gastos diários (${formatKz(dailyAvg)}/dia), o saldo deste mês tende a esgotar-se por volta do dia ${projectedDay}.`
+  };
+}
+
+/** Compara a média de gastos ao fim de semana com a média em dias de semana, nos últimos ~2 meses. */
+function weekendPatternInsight() {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - 56);
+  const cutoffISO = cutoff.toISOString().slice(0, 10);
+  const byDate = {};
+  STATE.transactions
+    .filter((t) => t.type === 'expense' && t.date >= cutoffISO)
+    .forEach((t) => { byDate[t.date] = (byDate[t.date] || 0) + t.amount; });
+
+  let weekendSum = 0, weekendDays = 0, weekdaySum = 0, weekdayDays = 0;
+  Object.entries(byDate).forEach(([date, total]) => {
+    const dow = new Date(`${date}T00:00:00`).getDay();
+    if (dow === 0 || dow === 6) { weekendSum += total; weekendDays++; } else { weekdaySum += total; weekdayDays++; }
+  });
+  if (weekendDays < 3 || weekdayDays < 5) return null;
+
+  const weekendAvg = weekendSum / weekendDays;
+  const weekdayAvg = weekdaySum / weekdayDays;
+  if (weekdayAvg <= 0) return null;
+
+  const diffPct = Math.round(((weekendAvg - weekdayAvg) / weekdayAvg) * 100);
+  if (Math.abs(diffPct) < 15) return null;
+  return diffPct > 0
+    ? { level: 'info', text: `Costumas gastar ${diffPct}% mais aos fins de semana do que durante a semana.` }
+    : { level: 'info', text: `Costumas gastar ${Math.abs(diffPct)}% menos aos fins de semana do que durante a semana.` };
+}
+
+/** Encontra a categoria cujo gasto mais cresceu este mês em relação ao mês anterior. */
+function categoryGrowthInsight(mKey) {
+  const prevKey = shiftMonth(mKey, -1);
+  const curByCat = {}, prevByCat = {};
+  txForMonth(mKey).filter((t) => t.type === 'expense').forEach((t) => { curByCat[t.category] = (curByCat[t.category] || 0) + t.amount; });
+  txForMonth(prevKey).filter((t) => t.type === 'expense').forEach((t) => { prevByCat[t.category] = (prevByCat[t.category] || 0) + t.amount; });
+
+  let best = null;
+  Object.entries(curByCat).forEach(([cat, val]) => {
+    const prevVal = prevByCat[cat] || 0;
+    if (prevVal >= 500 && val > prevVal * 1.4 && (val - prevVal) >= 2000) {
+      const pct = Math.round(((val - prevVal) / prevVal) * 100);
+      if (!best || pct > best.pct) best = { cat, pct };
+    }
+  });
+  if (!best) return null;
+  return { level: 'info', text: `Gastaste ${best.pct}% mais em "${best.cat}" este mês do que no mês passado.` };
+}
+
+/** Sinaliza acumulação de pequenas compras (gastos "invisíveis") no mês. */
+function frequentSmallSpendInsight(mKey) {
+  const SMALL_THRESHOLD = 3000;
+  const smallTx = txForMonth(mKey).filter((t) => t.type === 'expense' && t.amount > 0 && t.amount <= SMALL_THRESHOLD);
+  if (smallTx.length < 8) return null;
+  const total = smallTx.reduce((s, t) => s + t.amount, 0);
+  return { level: 'info', text: `Já fizeste ${smallTx.length} pequenas compras este mês (até ${formatKz(SMALL_THRESHOLD)} cada), somando ${formatKz(total)}. Vale a pena reparar nestes gastos "invisíveis".` };
+}
+
+/** Reúne os insights relevantes para o mês atual, no máximo 3. */
+function getInsights() {
+  const mKey = currentMonthKey();
+  return [spendingPaceInsight(mKey), weekendPatternInsight(), categoryGrowthInsight(mKey), frequentSmallSpendInsight(mKey)]
+    .filter(Boolean)
+    .slice(0, 3);
+}
+
+/** Simulador "Posso comprar isto agora?" — regras locais sobre saldo, contas e orçamento. */
+function purchaseAdvice(category, amount) {
+  const mKey = currentMonthKey();
+  const balance = totalBalance();
+  const balanceAfter = balance - amount;
+  const pendingBills = STATE.bills
+    .filter((b) => !(b.paidMonths || []).includes(mKey))
+    .reduce((s, b) => s + b.amount, 0);
+  const budgetLimit = STATE.budgets[category] || 0;
+  const spentInCat = txForMonth(mKey).filter((t) => t.type === 'expense' && t.category === category).reduce((s, t) => s + t.amount, 0);
+
+  if (balanceAfter < 0) {
+    return { level: 'red', text: 'Esta compra deixaria o teu saldo negativo.', balanceAfter };
+  }
+  if (balanceAfter < pendingBills) {
+    return { level: 'red', text: `Depois desta compra sobrariam ${formatKz(balanceAfter)} — não cobre as contas pendentes deste mês (${formatKz(pendingBills)}).`, balanceAfter };
+  }
+  if (budgetLimit > 0 && spentInCat + amount > budgetLimit) {
+    return { level: 'yellow', text: `Isto ultrapassa o orçamento de "${category}" para este mês (limite: ${formatKz(budgetLimit)}).`, balanceAfter };
+  }
+  if (balanceAfter < pendingBills * 1.3) {
+    return { level: 'yellow', text: `Dá para comprar, mas a folga depois de cobrir as contas fica curta (${formatKz(balanceAfter - pendingBills)}).`, balanceAfter };
+  }
+  return { level: 'green', text: 'Tranquilo — não compromete as contas pendentes nem o orçamento da categoria.', balanceAfter };
+}
+
+function openPurchaseAdviceSheet() {
+  const expenseCats = catList('expense');
+  const body = el(`
+    <form class="stack" id="purchaseForm">
+      <p style="font-size:12.5px;color:var(--text-dim);margin:0">Diz quanto queres gastar e em quê — o Nubolso vê se dá para respirar depois.</p>
+      <div class="field">
+        <label>Categoria</label>
+        <select name="category">
+          ${expenseCats.map((c) => `<option value="${escapeHtml(c.name)}">${escapeHtml(c.name)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field">
+        <label>Valor (Kz)</label>
+        <input type="number" inputmode="decimal" step="0.01" min="0.01" name="amount" placeholder="0,00" required autofocus>
+      </div>
+      <button type="submit" class="btn btn-accent btn-block">Analisar</button>
+      <div id="purchaseResult"></div>
+    </form>
+  `);
+  body.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const f = e.target;
+    const amount = parseFloat(f.amount.value) || 0;
+    if (amount <= 0) { showToast('Informa um valor válido'); return; }
+    const advice = purchaseAdvice(f.category.value, amount);
+    const title = advice.level === 'red' ? 'Vai comprometer as contas' : advice.level === 'yellow' ? 'Atenção' : 'Tranquilo';
+    const resultHolder = qs('#purchaseResult', body);
+    resultHolder.innerHTML = `
+      <div class="advice-banner ${advice.level}">
+        <span class="advice-banner__icon">${advice.level === 'red' ? '🔴' : advice.level === 'yellow' ? '🟡' : '🟢'}</span>
+        <div>
+          <strong>${title}</strong>
+          <p>${advice.text}</p>
+          <p class="mono" style="margin:4px 0 0;font-size:11.5px;color:var(--text-dim)">Saldo depois da compra: ${formatKz(advice.balanceAfter)}</p>
+        </div>
+      </div>
+    `;
+  });
+  openSheet('Posso comprar isto?', body);
+}
+
 /* ----------------------- Carregamento inicial ----------------------- */
 async function loadState() {
   const [transactions, budgetsArr, goals, bills, investments, categories, security, debts, debtPayments] = await Promise.all([
@@ -239,6 +402,7 @@ const iconChevronRight = icon('<path d="M9 18l6-6-6-6"/>');
 const iconTag = icon('<path d="M20.59 13.41 11 3.83A2 2 0 0 0 9.59 3.24L4 3a1 1 0 0 0-1 1l.24 5.59a2 2 0 0 0 .59 1.41l9.58 9.59a2 2 0 0 0 2.83 0l4.35-4.35a2 2 0 0 0 0-2.83z"/><circle cx="7.5" cy="7.5" r="1.2" fill="currentColor" stroke="none"/>');
 const iconLock = icon('<rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>');
 const iconHandshake = icon('<path d="M8.5 14.5 3 9l4-4 3.5 3.5"/><path d="M15.5 14.5 21 9l-4-4-3.5 3.5"/><path d="M8.5 14.5 11 17l2-2 2 2 2.5-2.5"/>');
+const iconSpark = icon('<path d="M12 3v3M12 18v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M3 12h3M18 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/><circle cx="12" cy="12" r="3"/>');
 
 /* ========================================================================
    TOPBAR & NAVEGAÇÃO
@@ -290,6 +454,7 @@ function openMoreSheet() {
       <button class="btn btn-block" style="justify-content:flex-start" data-action="nav-more" data-tab="investimentos">${iconTrend} &nbsp; Investimentos</button>
       <button class="btn btn-block" style="justify-content:flex-start" data-action="nav-more" data-tab="relatorios">${iconChart} &nbsp; Relatórios</button>
       <hr class="rule">
+      <button class="btn btn-block" style="justify-content:flex-start" data-action="open-purchase-advice-sheet">${iconSpark} &nbsp; Posso comprar isto?</button>
       <button class="btn btn-block" style="justify-content:flex-start" data-action="open-categories-sheet">${iconTag} &nbsp; Categorias</button>
       <button class="btn btn-block" style="justify-content:flex-start" data-action="open-security-sheet">${iconLock} &nbsp; Segurança${STATE.security ? ' · PIN ativo' : ''}</button>
       <button class="btn btn-block" style="justify-content:flex-start" data-action="export-data">${iconDownload} &nbsp; Exportar dados (JSON)</button>
@@ -560,6 +725,23 @@ function renderDashboard(main) {
 
   const wrap = el(`<div class="stack"></div>`);
   main.appendChild(wrap);
+
+  const insights = getInsights();
+  if (insights.length) {
+    wrap.appendChild(el(`
+      <div class="card">
+        <p class="section-title">${iconSpark} &nbsp; Assistente Nubolso</p>
+        <div class="stack" style="gap:10px">
+          ${insights.map((i) => `
+            <div class="row" style="align-items:flex-start;gap:8px">
+              <span style="flex-shrink:0;line-height:1.4">${i.level === 'red' ? '🔴' : i.level === 'yellow' ? '🟡' : i.level === 'green' ? '🟢' : '💡'}</span>
+              <span style="font-size:12.5px;color:var(--text-muted);line-height:1.4">${i.text}</span>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `));
+  }
 
   wrap.appendChild(el(`
     <div class="grid-2">
@@ -1510,6 +1692,7 @@ document.addEventListener('click', async (e) => {
   }
 
   if (action === 'open-security-sheet') { openSecuritySheet(); return; }
+  if (action === 'open-purchase-advice-sheet') { openPurchaseAdviceSheet(); return; }
   if (action === 'open-pin-form') { openPinFormSheet(t.dataset.mode); return; }
 
   if (action === 'export-data') { exportData(); return; }
