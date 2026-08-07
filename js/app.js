@@ -33,7 +33,7 @@ const INVESTMENT_TYPES = ['Poupança', 'Ações', 'Fundos', 'Imóveis', 'Criptom
 const MONTH_NAMES = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
 
 /* ----------------------- Estado global ----------------------- */
-let STATE = { transactions: [], budgets: {}, goals: [], bills: [], investments: [], categories: [], security: null, debts: [], debtPayments: [] };
+let STATE = { transactions: [], budgets: {}, goals: [], bills: [], investments: [], categories: [], security: null, debts: [], debtPayments: [], people: [] };
 let UI = {
   tab: 'dashboard',
   txMonth: currentMonthKey(),
@@ -119,15 +119,30 @@ function debtStatus(d) {
   return d.dueDate < todayISO() ? 'overdue' : 'pending';
 }
 /** Score de confiança: com base no histórico de kilapes já liquidados desta pessoa (só faz sentido para "a_receber") */
-function personTrustBadge(person) {
-  const settledOnes = STATE.debts.filter((d) => d.direction === 'a_receber' && d.person === person && d.settled);
+function personTrustBadge(d) {
+  const settledOnes = STATE.debts.filter((x) => x.direction === 'a_receber' && x.settled &&
+    (d.personId ? x.personId === d.personId : x.person === d.person));
   if (settledOnes.length < 2) return null; // histórico curto demais para dizer algo útil
-  const onTime = settledOnes.filter((d) => !d.dueDate || !d.settledAt || d.settledAt <= d.dueDate).length;
+  const onTime = settledOnes.filter((x) => !x.dueDate || !x.settledAt || x.settledAt <= x.dueDate).length;
   const ratio = onTime / settledOnes.length;
   if (ratio >= 0.8) return { label: 'Bom pagador', cls: 'paid' };
   if (ratio >= 0.5) return { label: 'Pagamentos irregulares', cls: 'pending' };
   return { label: 'Atrasos frequentes', cls: 'overdue' };
 }
+
+/* ----------------------- Pessoas ----------------------- */
+function personById(id) { return STATE.people.find((p) => p.id === id) || null; }
+/** Dívidas ligadas a uma pessoa — por personId (novos registos) ou por nome (registos antigos, sem pessoa formal). */
+function debtsForPerson(person) {
+  return STATE.debts.filter((d) => (d.personId ? d.personId === person.id : d.person === person.name));
+}
+function personOwedToMe(person) {
+  return debtsForPerson(person).filter((d) => d.direction === 'a_receber' && !d.settled).reduce((s, d) => s + d.remainingAmount, 0);
+}
+function personOwedByMe(person) {
+  return debtsForPerson(person).filter((d) => d.direction === 'devo' && !d.settled).reduce((s, d) => s + d.remainingAmount, 0);
+}
+function personInitial(name) { return (name || '?').trim().charAt(0).toUpperCase(); }
 function whatsappReminderUrl(debt) {
   const valor = formatKz(debt.remainingAmount);
   const prazo = debt.dueDate ? ` combinado para ${debt.dueDate.split('-').reverse().join('/')}` : ' que ficou combinado';
@@ -141,174 +156,11 @@ function balanceUpToMonthEnd(key) {
     .reduce((s, t) => s + (t.type === 'income' ? t.amount : -t.amount), 0);
 }
 
-/* ========================================================================
-   PERSONAL INTELLIGENCE (PI) — heurísticas locais, sem IA externa
-   Tudo calculado a partir do que já está em STATE, 100% offline.
-   ======================================================================== */
-
-/** Projeta, ao ritmo de gastos atual, se/quando o saldo do mês fica apertado. */
-function spendingPaceInsight(mKey) {
-  if (mKey !== currentMonthKey()) return null;
-  const dayOfMonth = new Date().getDate();
-  const totalDays = daysInMonth(mKey);
-  const inc = monthIncome(mKey);
-  const exp = monthExpense(mKey);
-  if (exp <= 0 || inc <= 0) return null;
-
-  const dailyAvg = exp / dayOfMonth;
-  const remaining = inc - exp;
-
-  if (remaining <= 0) {
-    return { level: 'red', text: `Já gastaste ${formatKz(exp)} este mês, mais do que as receitas de ${formatKz(inc)}.` };
-  }
-  const daysAfford = Math.floor(remaining / dailyAvg);
-  const projectedDay = dayOfMonth + daysAfford;
-
-  if (projectedDay >= totalDays) {
-    return { level: 'green', text: `No ritmo atual de gastos, o saldo do mês dá tranquilamente até ao dia ${totalDays}.` };
-  }
-  return {
-    level: projectedDay - dayOfMonth <= 4 ? 'red' : 'yellow',
-    text: `No ritmo atual de gastos diários (${formatKz(dailyAvg)}/dia), o saldo deste mês tende a esgotar-se por volta do dia ${projectedDay}.`
-  };
-}
-
-/** Compara a média de gastos ao fim de semana com a média em dias de semana, nos últimos ~2 meses. */
-function weekendPatternInsight() {
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - 56);
-  const cutoffISO = cutoff.toISOString().slice(0, 10);
-  const byDate = {};
-  STATE.transactions
-    .filter((t) => t.type === 'expense' && t.date >= cutoffISO)
-    .forEach((t) => { byDate[t.date] = (byDate[t.date] || 0) + t.amount; });
-
-  let weekendSum = 0, weekendDays = 0, weekdaySum = 0, weekdayDays = 0;
-  Object.entries(byDate).forEach(([date, total]) => {
-    const dow = new Date(`${date}T00:00:00`).getDay();
-    if (dow === 0 || dow === 6) { weekendSum += total; weekendDays++; } else { weekdaySum += total; weekdayDays++; }
-  });
-  if (weekendDays < 3 || weekdayDays < 5) return null;
-
-  const weekendAvg = weekendSum / weekendDays;
-  const weekdayAvg = weekdaySum / weekdayDays;
-  if (weekdayAvg <= 0) return null;
-
-  const diffPct = Math.round(((weekendAvg - weekdayAvg) / weekdayAvg) * 100);
-  if (Math.abs(diffPct) < 15) return null;
-  return diffPct > 0
-    ? { level: 'info', text: `Costumas gastar ${diffPct}% mais aos fins de semana do que durante a semana.` }
-    : { level: 'info', text: `Costumas gastar ${Math.abs(diffPct)}% menos aos fins de semana do que durante a semana.` };
-}
-
-/** Encontra a categoria cujo gasto mais cresceu este mês em relação ao mês anterior. */
-function categoryGrowthInsight(mKey) {
-  const prevKey = shiftMonth(mKey, -1);
-  const curByCat = {}, prevByCat = {};
-  txForMonth(mKey).filter((t) => t.type === 'expense').forEach((t) => { curByCat[t.category] = (curByCat[t.category] || 0) + t.amount; });
-  txForMonth(prevKey).filter((t) => t.type === 'expense').forEach((t) => { prevByCat[t.category] = (prevByCat[t.category] || 0) + t.amount; });
-
-  let best = null;
-  Object.entries(curByCat).forEach(([cat, val]) => {
-    const prevVal = prevByCat[cat] || 0;
-    if (prevVal >= 500 && val > prevVal * 1.4 && (val - prevVal) >= 2000) {
-      const pct = Math.round(((val - prevVal) / prevVal) * 100);
-      if (!best || pct > best.pct) best = { cat, pct };
-    }
-  });
-  if (!best) return null;
-  return { level: 'info', text: `Gastaste ${best.pct}% mais em "${best.cat}" este mês do que no mês passado.` };
-}
-
-/** Sinaliza acumulação de pequenas compras (gastos "invisíveis") no mês. */
-function frequentSmallSpendInsight(mKey) {
-  const SMALL_THRESHOLD = 3000;
-  const smallTx = txForMonth(mKey).filter((t) => t.type === 'expense' && t.amount > 0 && t.amount <= SMALL_THRESHOLD);
-  if (smallTx.length < 8) return null;
-  const total = smallTx.reduce((s, t) => s + t.amount, 0);
-  return { level: 'info', text: `Já fizeste ${smallTx.length} pequenas compras este mês (até ${formatKz(SMALL_THRESHOLD)} cada), somando ${formatKz(total)}. Vale a pena reparar nestes gastos "invisíveis".` };
-}
-
-/** Reúne os insights relevantes para o mês atual, no máximo 3. */
-function getInsights() {
-  const mKey = currentMonthKey();
-  return [spendingPaceInsight(mKey), weekendPatternInsight(), categoryGrowthInsight(mKey), frequentSmallSpendInsight(mKey)]
-    .filter(Boolean)
-    .slice(0, 3);
-}
-
-/** Simulador "Posso comprar isto agora?" — regras locais sobre saldo, contas e orçamento. */
-function purchaseAdvice(category, amount) {
-  const mKey = currentMonthKey();
-  const balance = totalBalance();
-  const balanceAfter = balance - amount;
-  const pendingBills = STATE.bills
-    .filter((b) => !(b.paidMonths || []).includes(mKey))
-    .reduce((s, b) => s + b.amount, 0);
-  const budgetLimit = STATE.budgets[category] || 0;
-  const spentInCat = txForMonth(mKey).filter((t) => t.type === 'expense' && t.category === category).reduce((s, t) => s + t.amount, 0);
-
-  if (balanceAfter < 0) {
-    return { level: 'red', text: 'Esta compra deixaria o teu saldo negativo.', balanceAfter };
-  }
-  if (balanceAfter < pendingBills) {
-    return { level: 'red', text: `Depois desta compra sobrariam ${formatKz(balanceAfter)} — não cobre as contas pendentes deste mês (${formatKz(pendingBills)}).`, balanceAfter };
-  }
-  if (budgetLimit > 0 && spentInCat + amount > budgetLimit) {
-    return { level: 'yellow', text: `Isto ultrapassa o orçamento de "${category}" para este mês (limite: ${formatKz(budgetLimit)}).`, balanceAfter };
-  }
-  if (balanceAfter < pendingBills * 1.3) {
-    return { level: 'yellow', text: `Dá para comprar, mas a folga depois de cobrir as contas fica curta (${formatKz(balanceAfter - pendingBills)}).`, balanceAfter };
-  }
-  return { level: 'green', text: 'Tranquilo — não compromete as contas pendentes nem o orçamento da categoria.', balanceAfter };
-}
-
-function openPurchaseAdviceSheet() {
-  const expenseCats = catList('expense');
-  const body = el(`
-    <form class="stack" id="purchaseForm">
-      <p style="font-size:12.5px;color:var(--text-dim);margin:0">Diz quanto queres gastar e em quê — o Nubolso vê se dá para respirar depois.</p>
-      <div class="field">
-        <label>Categoria</label>
-        <select name="category">
-          ${expenseCats.map((c) => `<option value="${escapeHtml(c.name)}">${escapeHtml(c.name)}</option>`).join('')}
-        </select>
-      </div>
-      <div class="field">
-        <label>Valor (Kz)</label>
-        <input type="number" inputmode="decimal" step="0.01" min="0.01" name="amount" placeholder="0,00" required autofocus>
-      </div>
-      <button type="submit" class="btn btn-accent btn-block">Analisar</button>
-      <div id="purchaseResult"></div>
-    </form>
-  `);
-  body.addEventListener('submit', (e) => {
-    e.preventDefault();
-    const f = e.target;
-    const amount = parseFloat(f.amount.value) || 0;
-    if (amount <= 0) { showToast('Informa um valor válido'); return; }
-    const advice = purchaseAdvice(f.category.value, amount);
-    const title = advice.level === 'red' ? 'Vai comprometer as contas' : advice.level === 'yellow' ? 'Atenção' : 'Tranquilo';
-    const resultHolder = qs('#purchaseResult', body);
-    resultHolder.innerHTML = `
-      <div class="advice-banner ${advice.level}">
-        <span class="advice-banner__icon">${advice.level === 'red' ? '🔴' : advice.level === 'yellow' ? '🟡' : '🟢'}</span>
-        <div>
-          <strong>${title}</strong>
-          <p>${advice.text}</p>
-          <p class="mono" style="margin:4px 0 0;font-size:11.5px;color:var(--text-dim)">Saldo depois da compra: ${formatKz(advice.balanceAfter)}</p>
-        </div>
-      </div>
-    `;
-  });
-  openSheet('Posso comprar isto?', body);
-}
-
 /* ----------------------- Carregamento inicial ----------------------- */
 async function loadState() {
-  const [transactions, budgetsArr, goals, bills, investments, categories, security, debts, debtPayments] = await Promise.all([
+  const [transactions, budgetsArr, goals, bills, investments, categories, security, debts, debtPayments, people] = await Promise.all([
     DB.getAll('transactions'), DB.getAll('budgets'), DB.getAll('goals'), DB.getAll('bills'), DB.getAll('investments'),
-    DB.getAll('categories'), DB.get('settings', 'security'), DB.getAll('debts'), DB.getAll('debtPayments')
+    DB.getAll('categories'), DB.get('settings', 'security'), DB.getAll('debts'), DB.getAll('debtPayments'), DB.getAll('people')
   ]);
   STATE.transactions = transactions.sort((a, b) => (b.date + b.id).localeCompare(a.date + a.id));
   STATE.budgets = {};
@@ -320,6 +172,7 @@ async function loadState() {
   STATE.security = security || null;
   STATE.debts = debts.sort((a, b) => (a.dueDate || '9999').localeCompare(b.dueDate || '9999'));
   STATE.debtPayments = debtPayments;
+  STATE.people = people.sort((a, b) => a.name.localeCompare(b.name));
 
   if (STATE.categories.length === 0) {
     const seeds = [
@@ -388,7 +241,7 @@ function catDotHtml(category, type) {
 /* ========================================================================
    ÍCONES (SVG inline, sem dependências) — definidos antes do uso
    ======================================================================== */
-function icon(paths) { return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`; }
+function icon(paths) { return `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`; }
 const iconHome = icon('<path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/>');
 const iconSwap = icon('<path d="M7 4v13M7 17l-3-3M7 17l3-3"/><path d="M17 20V7M17 7l3 3M17 7l-3 3"/>');
 const iconPie = icon('<path d="M21 12A9 9 0 1 1 12 3v9z"/>');
@@ -405,7 +258,8 @@ const iconChevronRight = icon('<path d="M9 18l6-6-6-6"/>');
 const iconTag = icon('<path d="M20.59 13.41 11 3.83A2 2 0 0 0 9.59 3.24L4 3a1 1 0 0 0-1 1l.24 5.59a2 2 0 0 0 .59 1.41l9.58 9.59a2 2 0 0 0 2.83 0l4.35-4.35a2 2 0 0 0 0-2.83z"/><circle cx="7.5" cy="7.5" r="1.2" fill="currentColor" stroke="none"/>');
 const iconLock = icon('<rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>');
 const iconHandshake = icon('<path d="M8.5 14.5 3 9l4-4 3.5 3.5"/><path d="M15.5 14.5 21 9l-4-4-3.5 3.5"/><path d="M8.5 14.5 11 17l2-2 2 2 2.5-2.5"/>');
-const iconSpark = icon('<path d="M12 3v3M12 18v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M3 12h3M18 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/><circle cx="12" cy="12" r="3"/>');
+const iconUsers = icon('<circle cx="9" cy="8" r="3.2"/><path d="M2.5 19c0-3.7 2.9-6.2 6.5-6.2s6.5 2.5 6.5 6.2"/><path d="M16.3 5c1.5.4 2.6 1.7 2.6 3.3s-1.1 2.9-2.6 3.3"/><path d="M18.5 12.9c2.1.6 3.6 2.3 3.6 4.4"/>');
+const iconPlus = icon('<path d="M12 5v14M5 12h14"/>');
 
 /* ========================================================================
    TOPBAR & NAVEGAÇÃO
@@ -479,27 +333,66 @@ function setTab(tab) {
   render();
 }
 
+function moreRow(iconSvg, label, dataAttrs, meta) {
+  const attrs = Object.entries(dataAttrs).map(([k, v]) => `data-${k}="${v}"`).join(' ');
+  return `
+    <button type="button" class="menu-row" ${attrs}>
+      <span class="menu-row__icon">${iconSvg}</span>
+      <span class="menu-row__label">${label}</span>
+      ${meta ? `<span class="menu-row__meta">${meta}</span>` : ''}
+      ${iconChevronRight}
+    </button>
+  `;
+}
+
 function openMoreSheet() {
   const body = el(`
     <div class="stack">
-      <button class="btn btn-block" style="justify-content:flex-start" data-action="nav-more" data-tab="contas">${iconReceipt} &nbsp; Contas a pagar</button>
-      <button class="btn btn-block" style="justify-content:flex-start" data-action="nav-more" data-tab="dividas">${iconHandshake} &nbsp; Dívidas & Kilapes</button>
-      <button class="btn btn-block" style="justify-content:flex-start" data-action="nav-more" data-tab="investimentos">${iconTrend} &nbsp; Investimentos</button>
-      <button class="btn btn-block" style="justify-content:flex-start" data-action="nav-more" data-tab="metas">${iconTarget} &nbsp; Metas</button>
-      <hr class="rule">
-      <button class="btn btn-block" style="justify-content:flex-start" data-action="open-purchase-advice-sheet">${iconSpark} &nbsp; Posso comprar isto?</button>
-      <button class="btn btn-block" style="justify-content:flex-start" data-action="open-categories-sheet">${iconTag} &nbsp; Categorias</button>
-      <button class="btn btn-block" style="justify-content:flex-start" data-action="open-security-sheet">${iconLock} &nbsp; Segurança${STATE.security ? ' · PIN ativo' : ''}</button>
-      <button class="btn btn-block" style="justify-content:flex-start" data-action="export-data">${iconDownload} &nbsp; Exportar dados (JSON)</button>
-      <button class="btn btn-block" style="justify-content:flex-start" data-action="trigger-import">${iconUpload} &nbsp; Importar dados</button>
-      <input type="file" id="importInput" accept="application/json" class="hidden">
-      <button class="btn btn-block" style="justify-content:flex-start" id="installBtn" data-action="install-app" hidden>${iconDownload} &nbsp; Instalar aplicativo</button>
-      <hr class="rule">
-      <button class="btn btn-block btn-danger" data-action="wipe-data">${iconTrash} &nbsp; Apagar todos os dados</button>
+      <div class="menu-group">
+        <p class="menu-group__title">Navegação</p>
+        <div class="menu-list">
+          ${moreRow(iconReceipt, 'Contas a pagar', { action: 'nav-more', tab: 'contas' })}
+          ${moreRow(iconHandshake, 'Dívidas & Kilapes', { action: 'nav-more', tab: 'dividas' })}
+          ${moreRow(iconUsers, 'Pessoas', { action: 'open-people-sheet' }, STATE.people.length ? String(STATE.people.length) : '')}
+          ${moreRow(iconTrend, 'Investimentos', { action: 'nav-more', tab: 'investimentos' })}
+          ${moreRow(iconTarget, 'Metas', { action: 'nav-more', tab: 'metas' })}
+        </div>
+      </div>
+
+      <div class="menu-group">
+        <p class="menu-group__title">Preferências</p>
+        <div class="menu-list">
+          ${moreRow(iconTag, 'Categorias', { action: 'open-categories-sheet' })}
+          ${moreRow(iconLock, 'Segurança', { action: 'open-security-sheet' }, STATE.security ? 'PIN ativo' : '')}
+        </div>
+      </div>
+
+      <div class="menu-group">
+        <p class="menu-group__title">Dados</p>
+        <div class="menu-list">
+          ${moreRow(iconDownload, 'Exportar dados (JSON)', { action: 'export-data' })}
+          ${moreRow(iconUpload, 'Importar dados', { action: 'trigger-import' })}
+          <button type="button" class="menu-row hidden" id="installBtn" data-action="install-app">
+            <span class="menu-row__icon">${iconDownload}</span>
+            <span class="menu-row__label">Instalar aplicativo</span>
+            ${iconChevronRight}
+          </button>
+        </div>
+        <input type="file" id="importInput" accept="application/json" class="hidden">
+      </div>
+
+      <div class="menu-group">
+        <div class="menu-list">
+          <button type="button" class="menu-row danger" data-action="wipe-data">
+            <span class="menu-row__icon">${iconTrash}</span>
+            <span class="menu-row__label">Apagar todos os dados</span>
+          </button>
+        </div>
+      </div>
     </div>
   `);
   openSheet('Mais opções', body);
-  if (window.deferredInstallPrompt) qs('#installBtn', body).hidden = false;
+  if (window.deferredInstallPrompt) qs('#installBtn', body).classList.remove('hidden');
 }
 
 /* ========================================================================
@@ -759,23 +652,6 @@ function renderDashboard(main) {
 
   const wrap = el(`<div class="stack"></div>`);
   main.appendChild(wrap);
-
-  const insights = getInsights();
-  if (insights.length) {
-    wrap.appendChild(el(`
-      <div class="card">
-        <p class="section-title">${iconSpark} &nbsp; Assistente Nubolso</p>
-        <div class="stack" style="gap:10px">
-          ${insights.map((i) => `
-            <div class="row" style="align-items:flex-start;gap:8px">
-              <span style="flex-shrink:0;line-height:1.4">${i.level === 'red' ? '🔴' : i.level === 'yellow' ? '🟡' : i.level === 'green' ? '🟢' : '💡'}</span>
-              <span style="font-size:12.5px;color:var(--text-muted);line-height:1.4">${i.text}</span>
-            </div>
-          `).join('')}
-        </div>
-      </div>
-    `));
-  }
 
   wrap.appendChild(el(`
     <div class="grid-2">
@@ -1240,7 +1116,7 @@ function debtRow(d) {
   const sub = [];
   if (d.remainingAmount < d.originalAmount && !d.settled) sub.push(`de ${formatKz(d.originalAmount)}`);
   if (d.dueDate) sub.push(d.dueDate.split('-').reverse().join('/'));
-  const trust = d.direction === 'a_receber' ? personTrustBadge(d.person) : null;
+  const trust = d.direction === 'a_receber' ? personTrustBadge(d) : null;
   if (trust) {
     const emoji = trust.cls === 'paid' ? '🟢' : trust.cls === 'pending' ? '🟡' : '🔴';
     sub.push(`${emoji} ${trust.label}`);
@@ -1271,6 +1147,16 @@ function renderDebts(main) {
     </div>
   `));
 
+  wrap.appendChild(el(`
+    <div class="menu-list">
+      <button type="button" class="menu-row" data-action="open-people-sheet">
+        <span class="menu-row__icon">${iconUsers}</span>
+        <span class="menu-row__label">Pessoas<span>${STATE.people.length ? `${STATE.people.length} registada(s)` : 'Organizar kilapes por pessoa'}</span></span>
+        ${iconChevronRight}
+      </button>
+    </div>
+  `));
+
   const receberList = sortDebtsForList(STATE.debts.filter((d) => d.direction === 'a_receber'));
   const receberCard = el(`<div class="card"><p class="section-title">Me devem <span class="mono">${receberList.length}</span></p><div class="stack" id="debtsReceberList"></div></div>`);
   wrap.appendChild(receberCard);
@@ -1292,9 +1178,10 @@ function renderDebts(main) {
   }
 }
 
-function openDebtSheet(existing, forcedDirection) {
+function openDebtSheet(existing, forcedDirection, forcedPersonId) {
   const direction = forcedDirection || (existing ? existing.direction : 'a_receber');
   const hasPayments = existing ? paymentsForDebt(existing.id).length > 0 : false;
+  const selectedPersonId = forcedPersonId || (existing ? existing.personId : '') || '';
 
   const body = el(`
     <div class="stack">
@@ -1305,7 +1192,16 @@ function openDebtSheet(existing, forcedDirection) {
         </div>
         <div class="field">
           <label>${direction === 'devo' ? 'A quem devo' : 'Quem me deve'}</label>
-          <input type="text" name="person" value="${existing ? escapeHtml(existing.person) : ''}" placeholder="Nome" required autofocus>
+          <div class="row" style="gap:8px">
+            <select name="personId" id="debtPersonSelect" style="flex:1" required>
+              ${STATE.people.length
+                ? (!selectedPersonId ? '<option value="" disabled selected>Selecionar pessoa…</option>' : '')
+                : '<option value="" disabled selected>Nenhuma pessoa — toca em +</option>'}
+              ${STATE.people.map((p) => `<option value="${p.id}" ${p.id === selectedPersonId ? 'selected' : ''}>${escapeHtml(p.name)}</option>`).join('')}
+            </select>
+            <button type="button" class="btn icon-btn" id="debtNewPersonBtn" title="Nova pessoa">${iconPlus}</button>
+          </div>
+          ${existing && !existing.personId ? `<span style="font-size:11px;color:var(--text-dim)">Registo antigo (${escapeHtml(existing.person)}) — associa a uma pessoa para veres o histórico completo.</span>` : ''}
         </div>
         <div class="field">
           <label>Valor${hasPayments ? ' original' : ''} (Kz)</label>
@@ -1315,10 +1211,6 @@ function openDebtSheet(existing, forcedDirection) {
         <div class="field">
           <label>Data combinada (opcional)</label>
           <input type="date" name="dueDate" value="${existing && existing.dueDate ? existing.dueDate : ''}">
-        </div>
-        <div class="field">
-          <label>Telefone (opcional, para lembrete via WhatsApp)</label>
-          <input type="tel" name="phone" value="${existing && existing.phone ? escapeHtml(existing.phone) : ''}" placeholder="Ex: 244923456789">
         </div>
         <div class="field">
           <label>Nota (opcional)</label>
@@ -1347,8 +1239,16 @@ function openDebtSheet(existing, forcedDirection) {
   qsa('#debtDirSeg button', body).forEach((btn) => {
     btn.addEventListener('click', () => {
       if (btn.dataset.dir === direction) return;
+      const currentPersonId = qs('#debtPersonSelect', body).value;
       closeSheet();
-      openDebtSheet(existing, btn.dataset.dir);
+      openDebtSheet(existing, btn.dataset.dir, currentPersonId);
+    });
+  });
+
+  qs('#debtNewPersonBtn', body).addEventListener('click', () => {
+    const currentDir = qs('#debtDirSeg button.active', body).dataset.dir;
+    openPersonSheet(null, (newPerson) => {
+      openDebtSheet(existing, currentDir, newPerson.id);
     });
   });
 
@@ -1358,11 +1258,14 @@ function openDebtSheet(existing, forcedDirection) {
     const activeDir = qs('#debtDirSeg button.active', body).dataset.dir;
     const amount = parseFloat(f.amount.value) || 0;
     if (amount <= 0) { showToast('Informa um valor válido'); return; }
+    const person = f.personId.value ? personById(f.personId.value) : null;
+    if (!person) { showToast('Seleciona (ou cria) uma pessoa'); return; }
     const record = existing ? { ...existing } : { id: DB.uid(), settled: false, settledAt: null, createdAt: todayISO() };
     record.direction = activeDir;
-    record.person = f.person.value.trim();
+    record.personId = person.id;
+    record.person = person.name;
+    record.phone = person.phone || '';
     record.dueDate = f.dueDate.value || null;
-    record.phone = f.phone.value.trim();
     record.note = f.note.value.trim();
     if (!hasPayments) {
       record.originalAmount = amount;
@@ -1434,6 +1337,131 @@ function openDebtPaymentSheet(debtId) {
     showToast('Abatimento registado');
   });
   openSheet('Registar abatimento', body);
+}
+
+/* ========================================================================
+   PESSOAS — cadastro para atrelar kilapes (o que devo / o que me devem)
+   ======================================================================== */
+function personRow(p) {
+  const toMe = personOwedToMe(p);
+  const byMe = personOwedByMe(p);
+  const net = toMe - byMe;
+  const sub = [];
+  if (toMe > 0) sub.push(`me deve ${formatKz(toMe)}`);
+  if (byMe > 0) sub.push(`devo ${formatKz(byMe)}`);
+  return el(`
+    <div class="list-item" data-action="open-person-detail" data-id="${p.id}" style="cursor:pointer">
+      <div class="avatar">${personInitial(p.name)}</div>
+      <div class="list-item__body">
+        <div class="list-item__title">${escapeHtml(p.name)}</div>
+        <div class="list-item__sub">${sub.join(' · ') || 'Sem kilapes em aberto'}</div>
+      </div>
+      ${net !== 0 ? `<div class="list-item__amount ${net > 0 ? 'pos' : 'neg'}">${formatKz(net)}</div>` : ''}
+    </div>
+  `);
+}
+
+function openPeopleSheet() {
+  const body = el(`
+    <div class="stack">
+      <button type="button" class="btn btn-block" data-action="open-person-sheet">${iconPlus} &nbsp; Nova pessoa</button>
+      <div class="stack" id="peopleList"></div>
+    </div>
+  `);
+  const holder = qs('#peopleList', body);
+  if (!STATE.people.length) {
+    holder.appendChild(el(`<div class="empty"><p class="display">Ainda sem pessoas</p><p>Cria uma pessoa para atrelar kilapes que ela te deve ou que tu lhe deves.</p></div>`));
+  } else {
+    STATE.people.forEach((p) => holder.appendChild(personRow(p)));
+  }
+  openSheet('Pessoas', body);
+}
+
+function openPersonDetailSheet(personId) {
+  const person = personById(personId);
+  if (!person) { openPeopleSheet(); return; }
+  const debts = sortDebtsForList(debtsForPerson(person));
+  const toMe = personOwedToMe(person);
+  const byMe = personOwedByMe(person);
+
+  const body = el(`
+    <div class="stack">
+      <div class="row" style="align-items:center;gap:12px">
+        <div class="avatar" style="width:44px;height:44px;font-size:16px">${personInitial(person.name)}</div>
+        <div class="stack" style="gap:2px">
+          <strong style="font-size:15px">${escapeHtml(person.name)}</strong>
+          ${person.phone ? `<span style="font-size:12px;color:var(--text-dim)">${escapeHtml(person.phone)}</span>` : ''}
+        </div>
+      </div>
+      <div class="grid-2">
+        <div class="stat"><div class="label">Me deve</div><div class="value pos">${formatKz(toMe)}</div></div>
+        <div class="stat"><div class="label">Eu devo</div><div class="value neg">${formatKz(byMe)}</div></div>
+      </div>
+      <div class="row" style="gap:8px">
+        <button type="button" class="btn" style="flex:1" data-action="open-debt-sheet" data-dir="a_receber" data-person-id="${person.id}">+ Me deve</button>
+        <button type="button" class="btn" style="flex:1" data-action="open-debt-sheet" data-dir="devo" data-person-id="${person.id}">+ Eu devo</button>
+      </div>
+      ${person.note ? `<p style="font-size:12.5px;color:var(--text-muted);margin:0">${escapeHtml(person.note)}</p>` : ''}
+      <hr class="rule">
+      <p class="section-title" style="margin:0">Kilapes <span class="mono">${debts.length}</span></p>
+      <div class="stack" id="personDebtsList"></div>
+      <hr class="rule">
+      <div class="row" style="gap:8px">
+        <button type="button" class="btn" style="flex:1" data-action="open-person-sheet" data-id="${person.id}">Editar pessoa</button>
+        <button type="button" class="btn btn-danger" style="flex:1" data-action="delete-person" data-id="${person.id}">Eliminar</button>
+      </div>
+    </div>
+  `);
+  const holder = qs('#personDebtsList', body);
+  if (!debts.length) {
+    holder.appendChild(el(`<div class="empty"><p>Sem kilapes registados para esta pessoa.</p></div>`));
+  } else {
+    debts.forEach((d) => holder.appendChild(debtRow(d)));
+  }
+  openSheet('Pessoa', body);
+}
+
+function openPersonSheet(existing, onSaved) {
+  const body = el(`
+    <form class="stack" id="personForm">
+      <div class="field">
+        <label>Nome</label>
+        <input type="text" name="name" value="${existing ? escapeHtml(existing.name) : ''}" placeholder="Nome da pessoa" required autofocus>
+      </div>
+      <div class="field">
+        <label>Telefone (opcional, para lembrete via WhatsApp)</label>
+        <input type="tel" name="phone" value="${existing && existing.phone ? escapeHtml(existing.phone) : ''}" placeholder="Ex: 244923456789">
+      </div>
+      <div class="field">
+        <label>Nota (opcional)</label>
+        <textarea name="note" placeholder="Ex: colega de trabalho">${existing && existing.note ? escapeHtml(existing.note) : ''}</textarea>
+      </div>
+      <button type="submit" class="btn btn-accent btn-block">${existing ? 'Guardar alterações' : 'Adicionar pessoa'}</button>
+    </form>
+  `);
+  body.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    const name = f.name.value.trim();
+    if (!name) { showToast('Informa um nome'); return; }
+    const record = {
+      id: existing ? existing.id : DB.uid(),
+      name,
+      phone: f.phone.value.trim(),
+      note: f.note.value.trim(),
+      createdAt: existing ? existing.createdAt : todayISO()
+    };
+    await DB.put('people', record);
+    await loadState();
+    closeSheet();
+    if (onSaved) {
+      onSaved(record);
+    } else {
+      openPersonDetailSheet(record.id);
+    }
+    showToast(existing ? 'Pessoa atualizada' : 'Pessoa adicionada');
+  });
+  openSheet(existing ? 'Editar pessoa' : 'Nova pessoa', body);
 }
 
 /* ========================================================================
@@ -1677,23 +1705,6 @@ function renderBIGeral(body) {
       <div class="stat"><div class="label">Património líquido</div><div class="value">${formatKz(netWorth())}</div></div>
     </div>
   `));
-
-  const insights = getInsights();
-  if (insights.length) {
-    body.appendChild(el(`
-      <div class="card">
-        <p class="section-title">${iconSpark} &nbsp; Assistente Nubolso</p>
-        <div class="stack" style="gap:10px">
-          ${insights.map((i) => `
-            <div class="row" style="align-items:flex-start;gap:8px">
-              <span style="flex-shrink:0;line-height:1.4">${i.level === 'red' ? '🔴' : i.level === 'yellow' ? '🟡' : i.level === 'green' ? '🟢' : '💡'}</span>
-              <span style="font-size:12.5px;color:var(--text-muted);line-height:1.4">${i.text}</span>
-            </div>
-          `).join('')}
-        </div>
-      </div>
-    `));
-  }
 }
 
 function renderBITendencias(body) {
@@ -1912,7 +1923,7 @@ async function importDataFromFile(file) {
 }
 async function wipeAllData() {
   if (!confirm('Isto apagará TODOS os dados do app permanentemente. Continuar?')) return;
-  await Promise.all(['transactions', 'budgets', 'goals', 'bills', 'investments', 'categories', 'debts', 'debtPayments'].map((s) => DB.clear(s)));
+  await Promise.all(['transactions', 'budgets', 'goals', 'bills', 'investments', 'categories', 'debts', 'debtPayments', 'people'].map((s) => DB.clear(s)));
   await loadState();
   closeSheet();
   render();
@@ -2000,7 +2011,7 @@ document.addEventListener('click', async (e) => {
 
   if (action === 'open-debt-sheet') {
     const d = t.dataset.id ? STATE.debts.find((x) => x.id === t.dataset.id) : null;
-    openDebtSheet(d);
+    openDebtSheet(d, t.dataset.dir, t.dataset.personId);
     return;
   }
   if (action === 'open-debt-payment-sheet') { openDebtPaymentSheet(t.dataset.id); return; }
@@ -2013,6 +2024,28 @@ document.addEventListener('click', async (e) => {
       closeSheet();
       render();
       showToast('Kilape eliminado');
+    }
+    return;
+  }
+
+  if (action === 'open-people-sheet') { openPeopleSheet(); return; }
+  if (action === 'open-person-detail') { openPersonDetailSheet(t.dataset.id); return; }
+  if (action === 'open-person-sheet') {
+    const p = t.dataset.id ? personById(t.dataset.id) : null;
+    openPersonSheet(p);
+    return;
+  }
+  if (action === 'delete-person') {
+    const person = personById(t.dataset.id);
+    if (!person) return;
+    const linked = debtsForPerson(person);
+    if (linked.length) { showToast('Esta pessoa tem kilapes ligados — elimina-os primeiro'); return; }
+    if (confirm(`Eliminar ${person.name}?`)) {
+      await DB.delete('people', person.id);
+      await loadState();
+      closeSheet();
+      openPeopleSheet();
+      showToast('Pessoa eliminada');
     }
     return;
   }
@@ -2061,7 +2094,6 @@ document.addEventListener('click', async (e) => {
   }
 
   if (action === 'open-security-sheet') { openSecuritySheet(); return; }
-  if (action === 'open-purchase-advice-sheet') { openPurchaseAdviceSheet(); return; }
   if (action === 'open-pin-form') { openPinFormSheet(t.dataset.mode); return; }
 
   if (action === 'export-data') { exportData(); return; }
