@@ -109,20 +109,19 @@ a { color: var(--accent-text); }
 .display { font-family: var(--font-display); }
 
 /* =========================== Receita de vidro partilhada ===========================
-   Grão procedural + especular dinâmico, replicados do Aura Glass para as
-   superfícies "de topo" da app (topbar, sidebar, bottomnav, card, stat,
-   sheet, menu-list, toast, update-banner, profile-card). Elementos aninhados
-   dentro dessas superfícies (list-item, menu-row, chip, tab) usam um
-   tratamento mais leve, sem novo blur, para evitar "vidro sobre vidro". */
-.topbar, .sidebar, .bottomnav,
-.card, .stat, .sheet,
-.menu-list, .toast, .update-banner, .profile-card {
+   card, sheet, menu-list, toast e chip/segmented/input agora carregam as
+   classes reais do Aura Glass (.glass-card, .glass-modal, .glass-menu,
+   .glass-toast, .glass-chip, .glass-segmented, .glass-input...) — o grão
+   procedural e o especular dinâmico dessas superfícies já vêm de
+   aura-glass.css, sem precisar de réplica aqui.
+   topbar, sidebar (desktop), bottomnav e update-banner continuam com
+   layout próprio (barra fixa em pílula não serve para eles) e por isso
+   replicam a mesma receita manualmente. */
+.topbar, .sidebar, .bottomnav, .update-banner {
   position: relative;
   isolation: isolate;
 }
-.topbar::before, .sidebar::before, .bottomnav::before,
-.card::before, .stat::before, .sheet::before,
-.menu-list::before, .toast::before, .update-banner::before, .profile-card::before {
+.topbar::before, .sidebar::before, .bottomnav::before, .update-banner::before {
   content: '';
   position: absolute;
   inset: 0;
@@ -135,9 +134,7 @@ a { color: var(--accent-text); }
   background-size: 180px 180px;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
-.topbar::after, .sidebar::after, .bottomnav::after,
-.card::after, .stat::after, .sheet::after,
-.menu-list::after, .toast::after, .update-banner::after, .profile-card::after {
+.topbar::after, .sidebar::after, .bottomnav::after, .update-banner::after {
   content: '';
   position: absolute;
   inset: 0;
@@ -149,6 +146,10 @@ a { color: var(--accent-text); }
   mix-blend-mode: screen;
   transition: opacity var(--glass-duration-base);
 }
+
+/* profile-card, embora dentro de um .glass-menu, não recebeu a classe real
+   (fica só com o tratamento "achatado" de bloco interno mais abaixo) para
+   não empilhar um segundo grão/especular dentro do menu já texturizado. */
 
 /* =========================== App shell =========================== */
 #app {
@@ -357,6 +358,11 @@ main {
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
+.card .stat::before, .card .stat::after,
+.card .grid-2 .stat::before, .card .grid-2 .stat::after,
+.card .grid-3 .stat::before, .card .grid-3 .stat::after {
+  opacity: 0;
+}
 .stat .label { font-size: 10.5px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .6px; }
 .stat .value { font-family: var(--font-mono); font-size: 18px; font-weight: 600; margin-top: 4px; }
 
@@ -487,6 +493,15 @@ hr.rule { border: none; border-top: 1px solid var(--border-soft); margin: 12px 0
   box-shadow: var(--glass-focus-ring);
 }
 .field textarea { resize: vertical; min-height: 60px; }
+/* .glass-select desliga a seta nativa (appearance:none) sem repor outra —
+   aqui adicionamos o chevron, já que o sistema base não fornece um. */
+.field select, select.glass-select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 11px center;
+  background-size: 15px;
+  padding-right: 32px;
+}
 
 .segmented {
   display: flex;
@@ -576,6 +591,12 @@ hr.rule { border: none; border-top: 1px solid var(--border-soft); margin: 12px 0
   -webkit-backdrop-filter: var(--glass-blur-lg);
   border-radius: var(--radius-lg);
   overflow: hidden;
+  /* .glass-menu foi pensado como dropdown compacto (padding + z-index de
+     popover); aqui é uma secção de largura total dentro do fluxo normal —
+     anula as duas propriedades que não servem a este layout. */
+  padding: 0;
+  z-index: auto;
+  min-width: 0;
 }
 .menu-row {
   display: flex;
@@ -664,6 +685,9 @@ hr.rule { border: none; border-top: 1px solid var(--border-soft); margin: 12px 0
   display: flex;
   align-items: flex-end;
   justify-content: center;
+  /* .glass-modal-overlay traz padding:20px pensado para modal centrado;
+     no bottom-sheet mobile o vidro deve ir até à borda. */
+  padding: 0;
 }
 .sheet {
   width: 100%;
