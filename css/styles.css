@@ -1,27 +1,28 @@
 /* =========================================================
    Finanças — design tokens (conceito: livro-caixa / ledger)
+   Tema escuro (padrão) + tema claro via [data-theme="light"]
    ========================================================= */
 :root {
-  --bg: #0f1b14;
-  --surface: #16241c;
-  --surface-2: #1d2e23;
-  --surface-3: #24382a;
-  --border: #2a3b2f;
-  --border-soft: #23342a;
+  --bg: #12141a;
+  --surface: #191c23;
+  --surface-2: #20242c;
+  --surface-3: #282d38;
+  --border: #333947;
+  --border-soft: #262b35;
 
   --accent: #c9a227;        /* latão */
-  --accent-soft: rgba(201, 162, 39, 0.14);
+  --accent-soft: rgba(201, 162, 39, 0.16);
   --accent-text: #e0bc4d;
 
   --emerald: #4fa37b;       /* receitas / positivo */
-  --emerald-soft: rgba(79, 163, 123, 0.14);
+  --emerald-soft: rgba(79, 163, 123, 0.16);
 
   --rust: #c0563e;          /* despesas / alerta */
-  --rust-soft: rgba(192, 86, 62, 0.14);
+  --rust-soft: rgba(192, 86, 62, 0.16);
 
-  --text: #ede8dd;
-  --text-muted: #8fa396;
-  --text-dim: #5e7264;
+  --text: #eef0f4;
+  --text-muted: #9aa1b0;
+  --text-dim: #62697a;
 
   --font-display: 'Iowan Old Style', 'Palatino Linotype', Georgia, 'Times New Roman', serif;
   --font-body: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
@@ -31,6 +32,38 @@
   --radius-lg: 14px;
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-top: env(safe-area-inset-top, 0px);
+
+  color-scheme: dark;
+}
+
+/* Tema claro */
+:root[data-theme="light"] {
+  --bg: #f7f6f2;
+  --surface: #ffffff;
+  --surface-2: #f2f0ea;
+  --surface-3: #e9e6dd;
+  --border: #ddd8cb;
+  --border-soft: #e8e4d9;
+
+  --accent: #a9791a;
+  --accent-soft: rgba(169, 121, 26, 0.14);
+  --accent-text: #8a6414;
+
+  --emerald: #2f8f63;
+  --emerald-soft: rgba(47, 143, 99, 0.14);
+
+  --rust: #b23f27;
+  --rust-soft: rgba(178, 63, 39, 0.14);
+
+  --text: #201d17;
+  --text-muted: #6b6558;
+  --text-dim: #948d7a;
+
+  color-scheme: light;
+}
+
+body, .topbar, .sidebar, .bottomnav, .sheet, .btn, .icon-btn, .avatar {
+  transition: background-color .15s ease, border-color .15s ease, color .15s ease;
 }
 
 /* Tamanho padrão para todos os ícones gerados por icon() — sem isto o SVG
@@ -75,16 +108,41 @@ a { color: var(--accent-text); }
 }
 .topbar__row {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
-.topbar__title {
-  font-family: var(--font-display);
-  font-size: 20px;
-  font-weight: 700;
+.topbar__profile {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  background: none;
+  border: none;
+  padding: 0;
   margin: 0;
-  letter-spacing: 0.2px;
+  cursor: pointer;
+  color: inherit;
+  max-width: 56%;
+  text-align: left;
+}
+.topbar__profile-name {
+  font-family: var(--font-display);
+  font-size: 14.5px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.topbar__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.topbar__actions .icon-btn {
+  width: 32px;
+  height: 32px;
+  background: var(--surface-2);
 }
 .topbar__balance {
   text-align: right;
@@ -436,7 +494,7 @@ hr.rule { border: none; border-top: 1px solid var(--border-soft); margin: 12px 0
 .menu-row.danger { color: var(--rust); }
 .menu-row.danger .menu-row__icon { background: var(--rust-soft); color: var(--rust); }
 
-/* Avatar circular (pessoas) — reaproveita a paleta de categorias por iniciais */
+/* Avatar circular (pessoas / perfil) — foto, ou iniciais, ou ícone genérico */
 .avatar {
   width: 34px; height: 34px;
   border-radius: 50%;
@@ -446,7 +504,37 @@ hr.rule { border: none; border-top: 1px solid var(--border-soft); margin: 12px 0
   font-weight: 700;
   background: var(--surface-3);
   color: var(--accent-text);
+  overflow: hidden;
 }
+.avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.avatar svg.icon { width: 16px; height: 16px; color: var(--text-dim); }
+.avatar--sm { width: 28px; height: 28px; font-size: 11px; }
+.avatar--sm svg.icon { width: 14px; height: 14px; }
+.avatar--md { width: 44px; height: 44px; font-size: 16px; }
+.avatar--lg { width: 76px; height: 76px; font-size: 26px; }
+.avatar--lg svg.icon { width: 30px; height: 30px; }
+
+/* Cartão de perfil no menu "Mais" */
+.profile-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--border-soft);
+  background: var(--surface-2);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+}
+.profile-card__body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.profile-card__body strong { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.profile-card__body span { font-size: 11.5px; color: var(--text-dim); }
+.profile-card > svg.icon { flex-shrink: 0; color: var(--text-dim); opacity: .6; }
+
+/* Upload de foto (perfil / pessoa) */
+.photo-picker { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.menu-row.active-row { background: var(--accent-soft); color: var(--accent-text); }
+.menu-row.active-row .menu-row__icon { color: var(--accent-text); }
 
 /* =========================== Sheet (modal mobile) =========================== */
 .sheet-overlay {

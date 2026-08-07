@@ -6,7 +6,19 @@
   <title>Nubolso · Finanças Pessoais</title>
   <meta name="description" content="Controle suas finanças pessoais offline: lançamentos, orçamento, metas, contas e investimentos.">
 
-  <meta name="theme-color" content="#0f1b14">
+  <meta name="theme-color" content="#12141a">
+  <script>
+    // Aplica o tema (claro/escuro/automático) antes da primeira pintura, para evitar "flash" da cor errada.
+    (function () {
+      try {
+        var pref = localStorage.getItem('nubolso-theme') || 'system';
+        var resolved = pref === 'system'
+          ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+          : pref;
+        document.documentElement.setAttribute('data-theme', resolved);
+      } catch (e) {}
+    })();
+  </script>
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">

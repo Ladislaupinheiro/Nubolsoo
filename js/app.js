@@ -33,7 +33,7 @@ const INVESTMENT_TYPES = ['Poupança', 'Ações', 'Fundos', 'Imóveis', 'Criptom
 const MONTH_NAMES = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
 
 /* ----------------------- Estado global ----------------------- */
-let STATE = { transactions: [], budgets: {}, goals: [], bills: [], investments: [], categories: [], security: null, debts: [], debtPayments: [], people: [] };
+let STATE = { transactions: [], budgets: {}, goals: [], bills: [], investments: [], categories: [], security: null, debts: [], debtPayments: [], people: [], profile: { name: '', photo: null } };
 let UI = {
   tab: 'dashboard',
   txMonth: currentMonthKey(),
@@ -44,8 +44,40 @@ let UI = {
   biSection: 'geral',
   biCatMonth: currentMonthKey(),
   biRangeMonths: 6,
-  biProjMonths: 6
+  biProjMonths: 6,
+  themePref: 'system',
+  themeResolved: 'dark'
 };
+
+/* ----------------------- Tema (claro / escuro / automático) ----------------------- */
+const THEME_STORAGE_KEY = 'nubolso-theme';
+function getStoredThemePref() {
+  try { return localStorage.getItem(THEME_STORAGE_KEY) || 'system'; } catch (e) { return 'system'; }
+}
+function resolveTheme(pref) {
+  if (pref === 'system') {
+    return window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+  }
+  return pref;
+}
+function applyTheme(pref) {
+  const resolved = resolveTheme(pref);
+  document.documentElement.setAttribute('data-theme', resolved);
+  const meta = qs('meta[name="theme-color"]');
+  if (meta) meta.content = resolved === 'light' ? '#f7f6f2' : '#12141a';
+  UI.themePref = pref;
+  UI.themeResolved = resolved;
+}
+function setThemePref(pref) {
+  try { localStorage.setItem(THEME_STORAGE_KEY, pref); } catch (e) {}
+  applyTheme(pref);
+  renderTopbar();
+}
+function toggleTheme() {
+  const current = UI.themeResolved || resolveTheme(getStoredThemePref());
+  setThemePref(current === 'light' ? 'dark' : 'light');
+}
+const THEME_LABELS = { light: 'Claro', dark: 'Escuro', system: 'Automático' };
 
 /* ----------------------- Utilitários ----------------------- */
 function el(html) {
@@ -158,9 +190,10 @@ function balanceUpToMonthEnd(key) {
 
 /* ----------------------- Carregamento inicial ----------------------- */
 async function loadState() {
-  const [transactions, budgetsArr, goals, bills, investments, categories, security, debts, debtPayments, people] = await Promise.all([
+  const [transactions, budgetsArr, goals, bills, investments, categories, security, debts, debtPayments, people, profile] = await Promise.all([
     DB.getAll('transactions'), DB.getAll('budgets'), DB.getAll('goals'), DB.getAll('bills'), DB.getAll('investments'),
-    DB.getAll('categories'), DB.get('settings', 'security'), DB.getAll('debts'), DB.getAll('debtPayments'), DB.getAll('people')
+    DB.getAll('categories'), DB.get('settings', 'security'), DB.getAll('debts'), DB.getAll('debtPayments'), DB.getAll('people'),
+    DB.get('settings', 'profile')
   ]);
   STATE.transactions = transactions.sort((a, b) => (b.date + b.id).localeCompare(a.date + a.id));
   STATE.budgets = {};
@@ -173,6 +206,7 @@ async function loadState() {
   STATE.debts = debts.sort((a, b) => (a.dueDate || '9999').localeCompare(b.dueDate || '9999'));
   STATE.debtPayments = debtPayments;
   STATE.people = people.sort((a, b) => a.name.localeCompare(b.name));
+  STATE.profile = profile || { name: '', photo: null };
 
   if (STATE.categories.length === 0) {
     const seeds = [
@@ -260,6 +294,48 @@ const iconLock = icon('<rect x="4" y="10" width="16" height="10" rx="2"/><path d
 const iconHandshake = icon('<path d="M8.5 14.5 3 9l4-4 3.5 3.5"/><path d="M15.5 14.5 21 9l-4-4-3.5 3.5"/><path d="M8.5 14.5 11 17l2-2 2 2 2.5-2.5"/>');
 const iconUsers = icon('<circle cx="9" cy="8" r="3.2"/><path d="M2.5 19c0-3.7 2.9-6.2 6.5-6.2s6.5 2.5 6.5 6.2"/><path d="M16.3 5c1.5.4 2.6 1.7 2.6 3.3s-1.1 2.9-2.6 3.3"/><path d="M18.5 12.9c2.1.6 3.6 2.3 3.6 4.4"/>');
 const iconPlus = icon('<path d="M12 5v14M5 12h14"/>');
+const iconUser = icon('<circle cx="12" cy="8" r="4"/><path d="M4.5 20c0-4.1 3.4-7 7.5-7s7.5 2.9 7.5 7"/>');
+const iconSun = icon('<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.5M12 19v2.5M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M2.5 12h2.5M19 12h2.5M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8"/>');
+const iconMoon = icon('<path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a7 7 0 0 0 10.5 10.5z"/>');
+const iconAuto = icon('<rect x="3" y="4.5" width="18" height="12" rx="2"/><path d="M8 20h8M12 16.5v3.5"/>');
+const iconCamera = icon('<path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="14" r="3.5"/>');
+const iconCheck = icon('<path d="M20 6 9 17l-5-5"/>');
+
+/* ----------------------- Avatar (foto, iniciais ou ícone genérico) ----------------------- */
+function avatarHtml(photo, name, extraClass) {
+  const cls = `avatar ${extraClass || ''}`.trim();
+  if (photo) return `<div class="${cls} avatar--photo"><img src="${photo}" alt=""></div>`;
+  if (name && name.trim()) return `<div class="${cls}">${personInitial(name)}</div>`;
+  return `<div class="${cls}">${iconUser}</div>`;
+}
+
+/** Lê um ficheiro de imagem, redimensiona e comprime para um data-URL leve (evita encher o IndexedDB). */
+function fileToResizedDataUrl(file, maxSize, quality) {
+  maxSize = maxSize || 320;
+  quality = quality || 0.85;
+  return new Promise((resolve, reject) => {
+    if (!file || !file.type || !file.type.startsWith('image/')) { reject(new Error('invalid-file')); return; }
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error || new Error('read-error'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('image-error'));
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > height && width > maxSize) { height = Math.round(height * (maxSize / width)); width = maxSize; }
+        else if (height >= width && height > maxSize) { width = Math.round(width * (maxSize / height)); height = maxSize; }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
 
 /* ========================================================================
    TOPBAR & NAVEGAÇÃO
@@ -267,12 +343,20 @@ const iconPlus = icon('<path d="M12 5v14M5 12h14"/>');
 function renderTopbar() {
   const bal = totalBalance();
   const topbar = qs('#topbar');
+  const profile = STATE.profile || {};
+  const resolved = UI.themeResolved || resolveTheme(getStoredThemePref());
   topbar.innerHTML = `
     <div class="topbar__row">
-      <p class="topbar__title">💼 Nubolso</p>
-      <div class="topbar__balance">
-        <span class="label">Saldo total</span>
-        <span class="value mono ${bal >= 0 ? 'pos' : 'neg'}">${formatKz(bal)}</span>
+      <button type="button" class="topbar__profile" data-action="open-profile-sheet">
+        ${avatarHtml(profile.photo, profile.name, 'avatar--sm')}
+        <span class="topbar__profile-name">${profile.name ? escapeHtml(profile.name) : 'Meu perfil'}</span>
+      </button>
+      <div class="topbar__actions">
+        <button type="button" class="icon-btn" data-action="toggle-theme" title="Alternar tema">${resolved === 'light' ? iconMoon : iconSun}</button>
+        <div class="topbar__balance">
+          <span class="label">Saldo total</span>
+          <span class="value mono ${bal >= 0 ? 'pos' : 'neg'}">${formatKz(bal)}</span>
+        </div>
       </div>
     </div>
   `;
@@ -346,8 +430,18 @@ function moreRow(iconSvg, label, dataAttrs, meta) {
 }
 
 function openMoreSheet() {
+  const profile = STATE.profile || {};
   const body = el(`
     <div class="stack">
+      <button type="button" class="profile-card" data-action="open-profile-sheet">
+        ${avatarHtml(profile.photo, profile.name, 'avatar--md')}
+        <div class="profile-card__body">
+          <strong>${profile.name ? escapeHtml(profile.name) : 'Adicionar o teu nome'}</strong>
+          <span>Editar perfil</span>
+        </div>
+        ${iconChevronRight}
+      </button>
+
       <div class="menu-group">
         <p class="menu-group__title">Navegação</p>
         <div class="menu-list">
@@ -362,6 +456,7 @@ function openMoreSheet() {
       <div class="menu-group">
         <p class="menu-group__title">Preferências</p>
         <div class="menu-list">
+          ${moreRow(UI.themeResolved === 'light' ? iconSun : iconMoon, 'Aparência', { action: 'open-theme-sheet' }, THEME_LABELS[UI.themePref] || '')}
           ${moreRow(iconTag, 'Categorias', { action: 'open-categories-sheet' })}
           ${moreRow(iconLock, 'Segurança', { action: 'open-security-sheet' }, STATE.security ? 'PIN ativo' : '')}
         </div>
@@ -393,6 +488,94 @@ function openMoreSheet() {
   `);
   openSheet('Mais opções', body);
   if (window.deferredInstallPrompt) qs('#installBtn', body).classList.remove('hidden');
+}
+
+/* ========================================================================
+   PERFIL DO UTILIZADOR (nome + foto)
+   ======================================================================== */
+function openProfileSheet() {
+  const profile = STATE.profile || {};
+  let pendingPhoto = profile.photo || null;
+
+  const body = el(`
+    <form class="stack" id="profileForm">
+      <div class="photo-picker">
+        <div id="profilePhotoPreview">${avatarHtml(pendingPhoto, profile.name, 'avatar--lg')}</div>
+        <div class="row" style="gap:8px">
+          <button type="button" class="btn btn-sm" id="profilePhotoBtn">${iconCamera} &nbsp; ${pendingPhoto ? 'Trocar foto' : 'Adicionar foto'}</button>
+          <button type="button" class="btn btn-sm btn-danger ${pendingPhoto ? '' : 'hidden'}" id="profilePhotoRemove">Remover</button>
+        </div>
+        <input type="file" accept="image/*" id="profilePhotoInput" class="hidden">
+      </div>
+      <div class="field">
+        <label>O teu nome</label>
+        <input type="text" name="name" value="${profile.name ? escapeHtml(profile.name) : ''}" placeholder="Como te chamas?" autofocus>
+      </div>
+      <button type="submit" class="btn btn-accent btn-block">Guardar</button>
+    </form>
+  `);
+
+  const refreshPreview = () => {
+    qs('#profilePhotoPreview', body).innerHTML = avatarHtml(pendingPhoto, qs('[name="name"]', body).value, 'avatar--lg');
+    qs('#profilePhotoRemove', body).classList.toggle('hidden', !pendingPhoto);
+    qs('#profilePhotoBtn', body).innerHTML = `${iconCamera} &nbsp; ${pendingPhoto ? 'Trocar foto' : 'Adicionar foto'}`;
+  };
+
+  qs('#profilePhotoBtn', body).addEventListener('click', () => qs('#profilePhotoInput', body).click());
+  qs('#profilePhotoInput', body).addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+      pendingPhoto = await fileToResizedDataUrl(file);
+      refreshPreview();
+    } catch (err) {
+      showToast('Não foi possível carregar essa imagem');
+    }
+  });
+  qs('#profilePhotoRemove', body).addEventListener('click', () => {
+    pendingPhoto = null;
+    refreshPreview();
+  });
+
+  body.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const name = e.target.name.value.trim();
+    const record = { key: 'profile', name, photo: pendingPhoto };
+    await DB.put('settings', record);
+    STATE.profile = record;
+    closeSheet();
+    renderTopbar();
+    showToast('Perfil atualizado');
+  });
+
+  openSheet('Meu perfil', body);
+}
+
+/* ========================================================================
+   APARÊNCIA (tema claro / escuro / automático)
+   ======================================================================== */
+function openThemeSheet() {
+  const pref = getStoredThemePref();
+  const options = [
+    { key: 'light', label: 'Claro', icon: iconSun },
+    { key: 'dark', label: 'Escuro', icon: iconMoon },
+    { key: 'system', label: 'Automático', icon: iconAuto, sub: 'Segue o sistema' }
+  ];
+  const body = el(`
+    <div class="stack">
+      <p style="font-size:12.5px;color:var(--text-dim)">Escolhe a aparência do Nubolso neste dispositivo.</p>
+      <div class="menu-list">
+        ${options.map((o) => `
+          <button type="button" class="menu-row ${pref === o.key ? 'active-row' : ''}" data-action="set-theme" data-theme="${o.key}">
+            <span class="menu-row__icon">${o.icon}</span>
+            <span class="menu-row__label">${o.label}${o.sub ? `<span>${o.sub}</span>` : ''}</span>
+            ${pref === o.key ? iconCheck : ''}
+          </button>
+        `).join('')}
+      </div>
+    </div>
+  `);
+  openSheet('Aparência', body);
 }
 
 /* ========================================================================
@@ -1351,7 +1534,7 @@ function personRow(p) {
   if (byMe > 0) sub.push(`devo ${formatKz(byMe)}`);
   return el(`
     <div class="list-item" data-action="open-person-detail" data-id="${p.id}" style="cursor:pointer">
-      <div class="avatar">${personInitial(p.name)}</div>
+      ${avatarHtml(p.photo, p.name)}
       <div class="list-item__body">
         <div class="list-item__title">${escapeHtml(p.name)}</div>
         <div class="list-item__sub">${sub.join(' · ') || 'Sem kilapes em aberto'}</div>
@@ -1387,7 +1570,7 @@ function openPersonDetailSheet(personId) {
   const body = el(`
     <div class="stack">
       <div class="row" style="align-items:center;gap:12px">
-        <div class="avatar" style="width:44px;height:44px;font-size:16px">${personInitial(person.name)}</div>
+        ${avatarHtml(person.photo, person.name, 'avatar--md')}
         <div class="stack" style="gap:2px">
           <strong style="font-size:15px">${escapeHtml(person.name)}</strong>
           ${person.phone ? `<span style="font-size:12px;color:var(--text-dim)">${escapeHtml(person.phone)}</span>` : ''}
@@ -1422,8 +1605,17 @@ function openPersonDetailSheet(personId) {
 }
 
 function openPersonSheet(existing, onSaved) {
+  let pendingPhoto = (existing && existing.photo) || null;
   const body = el(`
     <form class="stack" id="personForm">
+      <div class="photo-picker">
+        <div id="personPhotoPreview">${avatarHtml(pendingPhoto, existing ? existing.name : '', 'avatar--lg')}</div>
+        <div class="row" style="gap:8px">
+          <button type="button" class="btn btn-sm" id="personPhotoBtn">${iconCamera} &nbsp; ${pendingPhoto ? 'Trocar foto' : 'Adicionar foto'}</button>
+          <button type="button" class="btn btn-sm btn-danger ${pendingPhoto ? '' : 'hidden'}" id="personPhotoRemove">Remover</button>
+        </div>
+        <input type="file" accept="image/*" id="personPhotoInput" class="hidden">
+      </div>
       <div class="field">
         <label>Nome</label>
         <input type="text" name="name" value="${existing ? escapeHtml(existing.name) : ''}" placeholder="Nome da pessoa" required autofocus>
@@ -1439,6 +1631,28 @@ function openPersonSheet(existing, onSaved) {
       <button type="submit" class="btn btn-accent btn-block">${existing ? 'Guardar alterações' : 'Adicionar pessoa'}</button>
     </form>
   `);
+
+  const refreshPersonPhoto = () => {
+    qs('#personPhotoPreview', body).innerHTML = avatarHtml(pendingPhoto, qs('[name="name"]', body).value, 'avatar--lg');
+    qs('#personPhotoRemove', body).classList.toggle('hidden', !pendingPhoto);
+    qs('#personPhotoBtn', body).innerHTML = `${iconCamera} &nbsp; ${pendingPhoto ? 'Trocar foto' : 'Adicionar foto'}`;
+  };
+  qs('#personPhotoBtn', body).addEventListener('click', () => qs('#personPhotoInput', body).click());
+  qs('#personPhotoInput', body).addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+      pendingPhoto = await fileToResizedDataUrl(file);
+      refreshPersonPhoto();
+    } catch (err) {
+      showToast('Não foi possível carregar essa imagem');
+    }
+  });
+  qs('#personPhotoRemove', body).addEventListener('click', () => {
+    pendingPhoto = null;
+    refreshPersonPhoto();
+  });
+
   body.addEventListener('submit', async (e) => {
     e.preventDefault();
     const f = e.target;
@@ -1449,6 +1663,7 @@ function openPersonSheet(existing, onSaved) {
       name,
       phone: f.phone.value.trim(),
       note: f.note.value.trim(),
+      photo: pendingPhoto,
       createdAt: existing ? existing.createdAt : todayISO()
     };
     await DB.put('people', record);
@@ -2096,6 +2311,11 @@ document.addEventListener('click', async (e) => {
   if (action === 'open-security-sheet') { openSecuritySheet(); return; }
   if (action === 'open-pin-form') { openPinFormSheet(t.dataset.mode); return; }
 
+  if (action === 'open-profile-sheet') { openProfileSheet(); return; }
+  if (action === 'open-theme-sheet') { openThemeSheet(); return; }
+  if (action === 'set-theme') { setThemePref(t.dataset.theme); closeSheet(); return; }
+  if (action === 'toggle-theme') { toggleTheme(); return; }
+
   if (action === 'export-data') { exportData(); return; }
   if (action === 'trigger-import') { qs('#importInput').click(); return; }
   if (action === 'wipe-data') { wipeAllData(); return; }
@@ -2166,6 +2386,13 @@ function hideUpdateBanner() {
 }
 
 (async function init() {
+  applyTheme(getStoredThemePref());
+  if (window.matchMedia) {
+    window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
+      if (getStoredThemePref() === 'system') { applyTheme('system'); renderTopbar(); }
+    });
+  }
+
   routeFromHash();
   await loadState();
   render();
