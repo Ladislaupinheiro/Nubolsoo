@@ -64,7 +64,7 @@ function applyTheme(pref) {
   const resolved = resolveTheme(pref);
   document.documentElement.setAttribute('data-theme', resolved);
   const meta = qs('meta[name="theme-color"]');
-  if (meta) meta.content = resolved === 'light' ? '#f7f6f2' : '#12141a';
+  if (meta) meta.content = resolved === 'light' ? '#fbfcfe' : '#121316';
   UI.themePref = pref;
   UI.themeResolved = resolved;
 }
